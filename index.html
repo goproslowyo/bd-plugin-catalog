@@ -3,12 +3,104 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: https://raw.githubusercontent.com; connect-src https://raw.githubusercontent.com; font-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="description" content="A catalog of BetterDiscord plugins by GoProSlowYo. Search, filter by tag, and download the .plugin.js straight into your plugins folder.">
+  <meta name="color-scheme" content="dark light">
   <title>BetterDiscord Plugin Catalog</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <main>
-    <h1>BetterDiscord Plugin Catalog</h1>
-    <p>Coming soon. Plugins are published at <a href="https://github.com/goproslowyo/bd-plugins">goproslowyo/bd-plugins</a>.</p>
-  </main>
+  <a class="skip" href="#grid">Skip to plugins</a>
+
+  <div class="shell" id="shell">
+    <aside class="side" id="side" aria-label="Filters">
+      <div class="rail" id="rail" role="group" aria-label="Collapsed sidebar" aria-description="Use arrow keys to move between rail buttons">
+        <span class="mark" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="M9 2v6m6-6v6M6 8h12v3a6 6 0 0 1-12 0V8zm6 9v5"/></svg></span>
+        <button type="button" class="btn btn-quiet" data-expand="search" aria-label="Show search" title="Search (/)"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+        <button type="button" class="btn btn-quiet" data-expand="tags" aria-label="Show tag filters" title="Tags"><svg class="i" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4-2v-4L3 5z"/></svg><span class="n" id="rail-tag-count" hidden></span></button>
+        <button type="button" class="btn btn-quiet" data-expand="sort" aria-label="Show sort" title="Sort"><svg class="i" viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4"/></svg></button>
+        <span class="spacer"></span>
+        <span class="sep"></span>
+        <button type="button" class="btn btn-quiet theme-btn" data-theme-toggle aria-label="Switch to light theme" title="Toggle theme"><svg class="i icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4"/></svg><svg class="i icon-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+        <button type="button" class="btn btn-quiet" data-expand="fold" aria-label="Expand sidebar" title="Expand sidebar ([)"><svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/><path d="M20 4v16"/></svg></button>
+      </div>
+
+      <div class="brand">
+        <span class="mark" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="M9 2v6m6-6v6M6 8h12v3a6 6 0 0 1-12 0V8zm6 9v5"/></svg></span>
+        <div class="brand-text">
+          <h1>Plugin Catalog</h1>
+          <p class="tagline">BetterDiscord plugins by GoProSlowYo</p>
+        </div>
+        <button type="button" class="btn btn-quiet fold" id="fold" tabindex="-1" aria-label="Hide filters" title="Hide filters ([)"><svg class="i" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/><path d="M4 4v16"/></svg></button>
+      </div>
+
+      <label class="field search" for="q">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <span class="sr-only">Search plugins</span>
+        <input type="search" id="q" placeholder="Search plugins, authors, tags…" autocomplete="off" spellcheck="false">
+        <kbd class="kbd" aria-hidden="true">/</kbd>
+      </label>
+
+      <section class="side-section">
+        <h2 id="tags-h">Tags <a href="#" id="clear-tags" hidden>clear</a></h2>
+        <div class="taglist roving" id="taglist" role="group" aria-labelledby="tags-h" aria-description="Use arrow keys to move between tags, Enter or Space to toggle one"></div>
+      </section>
+
+      <section class="side-section">
+        <h2 id="sort-h">Sort</h2>
+        <div class="seg roving" id="sort" role="group" aria-labelledby="sort-h" aria-description="Use arrow keys to move between sort options, Enter or Space to choose one">
+          <button type="button" data-sort="catalog" aria-pressed="true" tabindex="0">Catalog</button>
+          <button type="button" data-sort="updated" aria-pressed="false" tabindex="-1">Updated</button>
+          <button type="button" data-sort="name" aria-pressed="false" tabindex="-1">A–Z</button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main" id="main">
+      <div class="toolbar" id="toolbar">
+        <span class="count" id="count" role="status" aria-live="polite"><strong class="num" id="count-shown">…</strong> of <span class="num" id="count-total">…</span> plugins</span>
+        <span class="active" id="active-tags"></span>
+        <a class="clear" href="#" id="reset">Reset</a>
+      </div>
+      <div id="banner-slot"></div>
+      <ul class="grid" id="grid" role="list" aria-label="Plugins" tabindex="-1"></ul>
+      <div id="fullstate-slot" hidden></div>
+    </main>
+
+    <!-- After <main> in the DOM so its controls come last in the Tab order; laid out inside the sidebar column by CSS. -->
+    <footer class="side-foot" id="side-foot" aria-label="Catalog tools">
+      <a class="repo-link" id="repo-link" href="https://github.com/goproslowyo/bd-plugins" rel="noopener noreferrer"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg><span id="repo-name">goproslowyo/bd-plugins</span></a>
+      <span id="catalog-updated" hidden>Catalog Updated <a id="catalog-updated-link" class="num" href="#" rel="noopener noreferrer" title="Catalog history"></a></span>
+      <div class="row">
+        <button type="button" class="btn btn-quiet" id="refresh" title="Changes on GitHub can take up to 5 minutes to appear"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg><span>Refresh</span></button>
+        <button type="button" class="btn btn-quiet theme-btn" data-theme-toggle aria-label="Switch to light theme" title="Toggle theme"><svg class="i icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4"/></svg><svg class="i icon-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+        <span class="density roving" id="density" role="group" aria-label="Card size" aria-description="Use arrow keys to move between the smaller and larger buttons">
+          <button type="button" data-density="-1" aria-label="Smaller cards" tabindex="0"><svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+          <span class="lvl" id="density-bars" aria-hidden="true"></span>
+          <button type="button" data-density="1" aria-label="Larger cards" tabindex="-1"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+        </span>
+      </div>
+      <span class="hint-line">Press <kbd class="kbd">?</kbd> for shortcuts</span>
+    </footer>
+  </div>
+
+  <div class="sr-only" id="announce" role="status" aria-live="polite"></div>
+
+  <dialog class="sheet" id="sheet" aria-labelledby="sheet-title"></dialog>
+
+  <dialog class="keys" id="keys" aria-labelledby="keys-title">
+    <h2 id="keys-title">Keyboard shortcuts <button type="button" class="btn btn-quiet d-close" data-close aria-label="Close"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></h2>
+    <dl>
+      <dt><kbd>/</kbd></dt><dd>Focus search</dd>
+      <dt><kbd>[</kbd></dt><dd>Collapse or expand the sidebar</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close the plugin sheet or this list</dd>
+      <dt><kbd>Tab</kbd></dt><dd>Move between cards, chips and buttons</dd>
+      <dt><kbd>Enter</kbd></dt><dd>Open the focused plugin</dd>
+      <dt><kbd>?</kbd></dt><dd>Show this list</dd>
+    </dl>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>

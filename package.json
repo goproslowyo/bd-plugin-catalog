@@ -1,0 +1,13 @@
+{
+  "name": "bd-plugin-catalog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static BetterDiscord plugin catalog served from GitHub Pages",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

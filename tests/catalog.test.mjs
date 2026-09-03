@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   readManifest,
   readPluginMetadata,
+  derivedUrls,
   brokenFromFetch,
   applyListState,
   parseListState,
@@ -111,7 +112,21 @@ test('readPluginMetadata: an External entry without sourceUrl is Broken', () => 
     downloadUrl: 'https://raw.githubusercontent.com/someone/else/main/X.plugin.js',
   });
   const result = readPluginMetadata(body, ENTRY, REPO);
-  assert.deepEqual(result, { status: 'broken', reason: 'Required field “sourceUrl” is missing.' });
+  assert.deepEqual(result, { status: 'broken', reason: 'Required field “sourceUrl” is missing.', downloadUrl: 'https://raw.githubusercontent.com/someone/else/main/X.plugin.js' });
+});
+
+test('readPluginMetadata: a Broken entry keeps its stated downloadUrl for the Fallback Link', () => {
+  const stated = 'https://raw.githubusercontent.com/Pharaoh2k/BetterDiscordStuff/main/Plugins/X/X.plugin.js';
+  const result = readPluginMetadata(JSON.stringify({ name: 'x', description: 'd', version: 5, author: 'a', downloadUrl: stated }), ENTRY, REPO);
+  assert.deepEqual(result, { status: 'broken', reason: 'Required field “version” has the wrong type.', downloadUrl: stated });
+});
+
+test('derivedUrls builds the Hosted download, source and changelog locations from the manifest name', () => {
+  assert.deepEqual(derivedUrls({ owner: 'goproslowyo', repo: 'bd-plugins', ref: 'test/broken' }, { id: 'x', name: 'HostedDerived', order: 0 }), {
+    downloadUrl: 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/test/broken/Plugins/HostedDerived/HostedDerived.plugin.js',
+    sourceUrl: 'https://github.com/goproslowyo/bd-plugins/tree/test/broken/Plugins/HostedDerived',
+    changelogUrl: 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/test/broken/Plugins/HostedDerived/CHANGELOG.md',
+  });
 });
 
 test('readPluginMetadata: bad optional fields are dropped individually and the entry still renders', () => {
@@ -158,6 +173,13 @@ test('readPluginMetadata: icon and pinnedUrl must be https on raw.githubusercont
   assert.equal(read({ pinnedUrl: 'https://raw.githubusercontent.com/o/r/75c20e7/X.plugin.js' }).pinnedUrl, 'https://raw.githubusercontent.com/o/r/75c20e7/X.plugin.js');
   assert.equal(read({ versionUrl: 'https://example.com/v1' }).versionUrl, 'https://example.com/v1');
   assert.equal(read({ versionUrl: 'http://example.com/v1' }).versionUrl, null);
+});
+
+test('readPluginMetadata: an array with a non-string element is a bad optional and is dropped whole', () => {
+  const base = { name: 'x', description: 'd', version: '1', author: 'a' };
+  const read = (extra) => readPluginMetadata(JSON.stringify({ ...base, ...extra }), ENTRY, REPO).plugin;
+  assert.deepEqual(read({ tags: ['a', 5, 'b'] }).tags, []);
+  assert.deepEqual(read({ features: ['a', 'b'] }).features, ['a', 'b']);
 });
 
 test('readPluginMetadata: a real but non-existent date is treated as absent', () => {
@@ -288,12 +310,12 @@ test('passesHeaderCheck looks at the first kilobyte for a META header', () => {
 /* ---------- links ---------- */
 
 test('versionLink: stated versionUrl, else the Hosted tag, else the file history with an honest title', () => {
-  const hosted = { ...plugin({ id: 'hosted-derived', name: 'HostedDerived' }), kind: 'hosted', servedFrom: 'goproslowyo/bd-plugins', version: '1.0.0' };
-  assert.deepEqual(versionLink(hosted), { href: 'https://github.com/goproslowyo/bd-plugins/tree/HostedDerived/v1.0.0/Plugins/HostedDerived', title: 'This version in the repository' });
+  const hosted = { ...plugin({ id: 'hosted-derived', name: 'HostedDerived' }), kind: 'hosted', servedFrom: 'Pharaoh2k/BetterDiscordStuff', version: '1.0.0' };
+  assert.deepEqual(versionLink(hosted, REPO), { href: 'https://github.com/goproslowyo/bd-plugins/tree/HostedDerived/v1.0.0/Plugins/HostedDerived', title: 'This version in the repository' });
   const external = { ...plugin({ id: 'better-pin-dms', name: 'BetterPinDMs' }), servedFrom: 'Pharaoh2k/BetterDiscordStuff' };
-  assert.deepEqual(versionLink(external), { href: 'https://github.com/Pharaoh2k/BetterDiscordStuff/commits/main/Plugins/BetterPinDMs/BetterPinDMs.plugin.js', title: 'No per-version link for this plugin; opens its change history' });
-  assert.deepEqual(versionLink({ ...external, versionUrl: 'https://example.com/v1' }), { href: 'https://example.com/v1', title: 'This version in the repository' });
-  assert.equal(versionLink({ ...external, servedFrom: null }), null);
+  assert.deepEqual(versionLink(external, REPO), { href: 'https://github.com/Pharaoh2k/BetterDiscordStuff/commits/main/Plugins/BetterPinDMs/BetterPinDMs.plugin.js', title: 'No per-version link for this plugin; opens its change history' });
+  assert.deepEqual(versionLink({ ...external, versionUrl: 'https://example.com/v1' }, REPO), { href: 'https://example.com/v1', title: 'This version in the repository' });
+  assert.equal(versionLink({ ...external, servedFrom: null }, REPO), null);
 });
 
 test('historyUrl uses the served-from repository and the manifest name', () => {

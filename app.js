@@ -8,6 +8,7 @@
 import {
   readManifest,
   readPluginMetadata,
+  derivedUrls,
   brokenFromFetch,
   applyListState,
   parseListState,
@@ -43,7 +44,7 @@ import {
 /** @typedef {import('./catalog.js').PluginEntry} PluginEntry */
 /** @typedef {import('./catalog.js').ListState} ListState */
 /** @typedef {import('./catalog.js').SortKey} SortKey */
-/** @typedef {{ status: 'ok', plugin: Plugin } | { status: 'broken', reason: string, throttled?: boolean }} Outcome */
+/** @typedef {import('./catalog.js').MetadataOutcome} Outcome */
 
 const REPOSITORY = { owner: 'goproslowyo', repo: 'bd-plugins', ref: 'main' };
 
@@ -737,6 +738,22 @@ function featuredBadge(p) {
 }
 
 /**
+ * The card's open control: the name as a Deep Link. A click records where to
+ * return focus and that this page pushed the hash, then lets the browser navigate.
+ * @param {string} id
+ * @param {string} name
+ * @param {string} label   accessible name
+ */
+function openControl(id, name, label) {
+  const open = h('a', { class: 'name', href: deepLinkHash(id), 'aria-label': label, text: name });
+  open.addEventListener('click', () => {
+    state.openedFrom = open;
+    state.pushedHash = true;
+  });
+  return open;
+}
+
+/**
  * @param {PluginEntry} entry
  * @param {Outcome} outcome
  */
@@ -749,11 +766,7 @@ function buildCard(entry, outcome) {
   const label = `${p.name}, version ${p.version}${recent ? `, updated ${days} ${days === 1 ? 'day' : 'days'} ago` : ''}. Open details`;
   const card = h('li', { class: 'card', 'data-id': p.id });
   card.style.setProperty('--h', String(hue(p.name)));
-  const open = h('a', { class: 'name', href: deepLinkHash(p.id), 'aria-label': label, text: p.name });
-  open.addEventListener('click', () => {
-    state.openedFrom = open;
-    state.pushedHash = true;
-  });
+  const open = openControl(p.id, p.name, label);
   card.append(
     h('div', { class: 'head' },
       tile(p, false),
@@ -778,11 +791,7 @@ function buildCard(entry, outcome) {
  */
 function buildBrokenCard(entry, outcome) {
   const card = h('li', { class: 'card broken', 'data-id': entry.id });
-  const open = h('a', { class: 'name', href: deepLinkHash(entry.id), 'aria-label': `${entry.name}, couldn't load. Open details`, text: entry.name });
-  open.addEventListener('click', () => {
-    state.openedFrom = open;
-    state.pushedHash = true;
-  });
+  const open = openControl(entry.id, entry.name, `${entry.name}, couldn't load. Open details`);
   card.append(
     h('div', { class: 'head' },
       h('span', { class: 'tile warn', 'aria-hidden': 'true' }, icon('warn')),
@@ -798,8 +807,21 @@ function buildBrokenCard(entry, outcome) {
 
 /* ============ The Detail View: bottom sheet ============ */
 
+/** The sheet's close button: first in DOM order (CSS places it last visually). */
 function closeButton() {
   return h('button', { type: 'button', class: 'btn btn-quiet d-close', 'data-close': '', 'aria-label': 'Close' }, icon('close'));
+}
+
+/** The Fallback Link: plain navigation to the artifact's live location. @param {string} url */
+function fallbackLink(url) {
+  return extLink(url, { class: 'fallback' }, 'Open raw file ', icon('ext'));
+}
+
+/** Copies this page's Deep Link for a plugin. @param {string} id */
+function copyLinkButton(id) {
+  const button = h('button', { type: 'button', class: 'btn btn-quiet' }, icon('link'), 'Copy link');
+  button.addEventListener('click', () => copyText(pageDeepLink(id), [button]));
+  return button;
 }
 
 /**
@@ -884,7 +906,7 @@ function folderHint() {
 /** @param {Plugin} p */
 function sheetHeader(p) {
   const today = new Date();
-  const ver = versionLink(p);
+  const ver = versionLink(p, REPOSITORY);
   const verNode = ver
     ? extLink(ver.href, { class: 'mono num', title: ver.title }, `v${p.version}`)
     : h('span', { class: 'mono num', text: `v${p.version}` });
@@ -893,7 +915,7 @@ function sheetHeader(p) {
     return url ? extLink(url, { class: 'author', title: 'GitHub profile' }, a) : h('span', { class: 'author', text: a });
   });
   const sub = h('div', { class: 'sub' }, verNode, ...authors, isRecentlyUpdated(p.lastUpdated, today) ? updatedBadge(p) : null, p.featured ? h('span', { class: 'badge badge-featured' }, icon('star'), 'Featured') : null);
-  return h('div', { class: 'd-head' }, tile(p, true), h('div', { class: 't' }, h('h2', { id: 'sheet-title', text: p.name }), sub), closeButton());
+  return h('div', { class: 'd-head' }, closeButton(), tile(p, true), h('div', { class: 't' }, h('h2', { id: 'sheet-title', text: p.name }), sub));
 }
 
 /** @param {Plugin} p */
@@ -916,15 +938,12 @@ function sheetActions(p) {
     snapshot.addEventListener('click', () => saveArtifact(/** @type {string} */ (p.pinnedUrl), filename, snapshot, stateEl, label));
     actions.append(snapshot);
   }
-  actions.append(extLink(p.downloadUrl, { class: 'fallback' }, 'Open raw file ', icon('ext')), stateEl);
+  actions.append(fallbackLink(p.downloadUrl), stateEl);
   return actions;
 }
 
-/**
- * @param {Plugin} p
- * @param {string} tag
- */
-function sheetTagButton(p, tag) {
+/** @param {string} tag */
+function sheetTagButton(tag) {
   return h('button', { type: 'button', title: `Show all ${tag} plugins`, text: tag, onclick: () => {
     state.list = { ...state.list, q: '', tags: [tag] };
     closeSheet();
@@ -959,7 +978,7 @@ function sheetBody(p) {
   const history = historyUrl(p);
   row('Updated', p.lastUpdated ? (history ? extLink(history, { class: 'num', title: 'What changed' }, formatDate(p.lastUpdated)) : h('span', { class: 'num', text: formatDate(p.lastUpdated) })) : null);
   row('License', p.license ? extLink(licenseUrl(p.license), { title: 'Licence text' }, p.license) : null);
-  row('Tags', p.tags.length ? h('span', { class: 'card-tags' }, ...p.tags.map((t) => sheetTagButton(p, t))) : null);
+  row('Tags', p.tags.length ? h('span', { class: 'card-tags' }, ...p.tags.map(sheetTagButton)) : null);
   row('Requirements', p.requirements.length ? h('ul', {}, ...p.requirements.map((r) => h('li', { text: r }))) : null);
   const kindBadge = h('span', { class: 'badge badge-kind', text: p.kind === 'external' ? 'External' : 'Hosted' });
   row('Served from', p.servedFrom ? h('span', {}, extLink(`https://github.com/${p.servedFrom}`, { class: 'mono' }, p.servedFrom), kindBadge) : kindBadge);
@@ -972,44 +991,40 @@ function sheetBody(p) {
       pinned ? h('span', {}, '; the snapshot is our own copy pinned to commit ', extLink(pinned.commitUrl, { class: 'mono' }, pinned.shortSha), '.') : '.')));
   }
 
-  const copyLink = h('button', { type: 'button', class: 'btn btn-quiet' }, icon('link'), 'Copy link');
-  copyLink.addEventListener('click', () => copyText(pageDeepLink(p.id), [copyLink]));
   body.append(h('div', { class: 'd-sect' }, h('h3', { text: 'Links' }), h('div', { class: 'd-links' },
     extLink(p.sourceUrl, { class: 'btn' }, icon('github'), 'Source'),
     p.changelogUrl ? extLink(p.changelogUrl, { class: 'btn' }, icon('ext'), 'Changelog') : null,
     extLink(p.issuesUrl, { class: 'btn' }, icon('warn'), 'Report an issue'),
-    copyLink)));
+    copyLinkButton(p.id))));
   return body;
 }
 
 /**
  * @param {PluginEntry} entry
- * @param {{ status: 'broken', reason: string }} outcome
+ * @param {{ status: 'broken', reason: string, downloadUrl?: string }} outcome
  */
 function brokenSheet(entry, outcome) {
   const head = h('div', { class: 'd-head' },
+    closeButton(),
     h('span', { class: 'tile lg warn', 'aria-hidden': 'true' }, icon('warn')),
-    h('div', { class: 't' }, h('h2', { id: 'sheet-title', text: entry.name }), h('div', { class: 'sub' }, h('span', { class: 'badge badge-bad', text: 'Couldn\'t load' }))),
-    closeButton());
-  const fallbackUrl = `${rawBase(REPOSITORY)}/Plugins/${entry.name}/${entry.name}.plugin.js`;
+    h('div', { class: 't' }, h('h2', { id: 'sheet-title', text: entry.name }), h('div', { class: 'sub' }, h('span', { class: 'badge badge-bad', text: 'Couldn\'t load' }))));
+  const derived = derivedUrls(REPOSITORY, entry);
   const retry = h('button', { type: 'button', class: 'btn' }, icon('refresh'), 'Retry');
   retry.addEventListener('click', async () => {
     /** @type {HTMLButtonElement} */ (retry).disabled = true;
     await retryEntries([entry.id]);
     renderSheet(entry.id);
   });
-  const copyLink = h('button', { type: 'button', class: 'btn btn-quiet' }, icon('link'), 'Copy link');
-  copyLink.addEventListener('click', () => copyText(pageDeepLink(entry.id), [copyLink]));
   const body = h('div', { class: 'd-body d-broken' },
     h('div', { class: 'banner banner-bad' }, icon('warn'), h('div', { class: 'grow' }, h('strong', { text: 'This plugin\'s details couldn\'t be read.' }), ' ', outcome.reason, ' The plugin itself may still work; you can fetch the raw file directly.')),
-    h('div', { class: 'd-actions' }, retry, extLink(fallbackUrl, { class: 'fallback' }, 'Open raw file ', icon('ext'))),
-    h('div', { class: 'd-links' }, extLink(`${repoUrl(REPOSITORY)}/tree/${REPOSITORY.ref}/Plugins/${entry.name}`, { class: 'btn' }, icon('github'), 'Source folder'), copyLink));
+    h('div', { class: 'd-actions' }, retry, fallbackLink(outcome.downloadUrl ?? derived.downloadUrl)),
+    h('div', { class: 'd-links' }, extLink(derived.sourceUrl, { class: 'btn' }, icon('github'), 'Source folder'), copyLinkButton(entry.id)));
   return [head, body];
 }
 
 /** @param {string} id */
 function notFoundSheet(id) {
-  const head = h('div', { class: 'd-head' }, h('div', { class: 't' }, h('h2', { id: 'sheet-title', class: 'sr-only', text: 'Plugin not found' })), closeButton());
+  const head = h('div', { class: 'd-head' }, closeButton(), h('div', { class: 't' }, h('h2', { id: 'sheet-title', class: 'sr-only', text: 'Plugin not found' })));
   const body = h('div', { class: 'd-nf' },
     h('div', { class: 'glyph' }, icon('ghost')),
     h('h2', {}, 'No plugin called ', h('code', { text: id })),
@@ -1117,8 +1132,13 @@ document.addEventListener('keydown', (e) => {
     }
     return;
   }
-  if (inField || els.sheet.open || els.keys.open) return;
   const isHelp = e.key === '?' || (e.code === 'Slash' && e.shiftKey);
+  if (isHelp && els.keys.open) {
+    e.preventDefault();
+    els.keys.close();
+    return;
+  }
+  if (inField || els.sheet.open || els.keys.open) return;
   if (isHelp) {
     e.preventDefault();
     els.keys.showModal();

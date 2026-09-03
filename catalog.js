@@ -65,7 +65,12 @@ export function readManifest(manifest) {
  * @property {string | null} servedFrom     owner/repo parsed from sourceUrl.
  */
 
-/** @typedef {{ status: 'ok', plugin: Plugin } | { status: 'broken', reason: string }} MetadataOutcome */
+/**
+ * A Broken Plugin keeps whatever it could still tell us: `downloadUrl` when the
+ * body stated a usable one (for the Fallback Link), `throttled` when the host
+ * answered 429.
+ * @typedef {{ status: 'ok', plugin: Plugin } | { status: 'broken', reason: string, downloadUrl?: string, throttled?: boolean }} MetadataOutcome
+ */
 
 export const RAW_HOST = 'https://raw.githubusercontent.com';
 const ALLOWLISTED_HOSTS = ['raw.githubusercontent.com'];
@@ -84,8 +89,12 @@ export const metadataUrl = (r, e) => `${rawBase(r)}/Plugins/${e.name}/plugin.jso
 /** @param {unknown} v */
 const isHttps = (v) => typeof v === 'string' && /^https:\/\/[^\s/]+/.test(v);
 
-/** @param {unknown} v */
-function isOnAllowlistedHost(v) {
+/**
+ * Whether the Site may fetch this URL itself (an Allowlisted Host). Anything
+ * else gets only a Fallback Link.
+ * @param {unknown} v
+ */
+export function isAllowlisted(v) {
   if (!isHttps(v)) return false;
   try {
     return ALLOWLISTED_HOSTS.includes(new URL(/** @type {string} */ (v)).hostname);
@@ -93,12 +102,6 @@ function isOnAllowlistedHost(v) {
     return false;
   }
 }
-
-/**
- * Whether the Site may fetch this URL itself. Anything else gets only a Fallback Link.
- * @param {string} url
- */
-export const isAllowlisted = (url) => isOnAllowlistedHost(url);
 
 /** @param {unknown} v @returns {string | null} */
 function isoDateOrNull(v) {
@@ -112,7 +115,7 @@ function isoDateOrNull(v) {
 }
 
 /** @param {unknown} v @returns {string[]} */
-const stringArray = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
+const stringArray = (v) => (Array.isArray(v) && v.every((x) => typeof x === 'string') ? /** @type {string[]} */ (v) : []);
 
 /** @param {unknown} v @returns {string | null} */
 const stringOrNull = (v) => (typeof v === 'string' ? v : null);
@@ -131,6 +134,22 @@ export const splitAuthors = (s) => s.split(',').map((a) => a.trim()).filter(Bool
 export function servedFromRepository(url) {
   const m = typeof url === 'string' ? /^https:\/\/github\.com\/([^/]+\/[^/]+)/.exec(url) : null;
   return m ? m[1].replace(/\.git$/, '') : null;
+}
+
+/**
+ * Where a Hosted entry's artifact, source folder and changelog live when its
+ * Plugin Metadata leaves them unstated. Built from the manifest name, never
+ * the metadata name.
+ * @param {Repository} repository
+ * @param {PluginEntry} entry
+ */
+export function derivedUrls(repository, entry) {
+  const base = rawBase(repository);
+  return {
+    downloadUrl: `${base}/Plugins/${entry.name}/${entry.name}.plugin.js`,
+    sourceUrl: `${repoUrl(repository)}/tree/${repository.ref}/Plugins/${entry.name}`,
+    changelogUrl: `${base}/Plugins/${entry.name}/CHANGELOG.md`,
+  };
 }
 
 /**
@@ -154,15 +173,16 @@ export function readPluginMetadata(body, entry, repository) {
     return { status: 'broken', reason: 'plugin.json is not a JSON object.' };
   }
   const meta = /** @type {Record<string, unknown>} */ (raw);
+  const statedDownload = isHttps(meta.downloadUrl) ? /** @type {string} */ (meta.downloadUrl) : null;
+  /** @param {string} reason @returns {MetadataOutcome} */
+  const broken = (reason) => (statedDownload ? { status: 'broken', reason, downloadUrl: statedDownload } : { status: 'broken', reason });
 
   for (const key of ['name', 'description', 'version', 'author']) {
-    if (!(key in meta) || meta[key] === null) return { status: 'broken', reason: `Required field “${key}” is missing.` };
-    if (typeof meta[key] !== 'string') return { status: 'broken', reason: `Required field “${key}” has the wrong type.` };
+    if (!(key in meta) || meta[key] === null) return broken(`Required field “${key}” is missing.`);
+    if (typeof meta[key] !== 'string') return broken(`Required field “${key}” has the wrong type.`);
   }
 
-  const base = rawBase(repository);
   const insideRepository = `${RAW_HOST}/${repository.owner}/${repository.repo}/`;
-  const statedDownload = isHttps(meta.downloadUrl) ? /** @type {string} */ (meta.downloadUrl) : null;
   const kind = statedDownload === null || statedDownload.startsWith(insideRepository) ? 'hosted' : 'external';
 
   /** @type {string | null} */
@@ -173,15 +193,16 @@ export function readPluginMetadata(body, entry, repository) {
   let changelogUrl = isHttps(meta.changelogUrl) ? /** @type {string} */ (meta.changelogUrl) : null;
 
   if (kind === 'hosted') {
-    downloadUrl ??= `${base}/Plugins/${entry.name}/${entry.name}.plugin.js`;
-    sourceUrl ??= `${repoUrl(repository)}/tree/${repository.ref}/Plugins/${entry.name}`;
-    changelogUrl ??= `${base}/Plugins/${entry.name}/CHANGELOG.md`;
+    const derived = derivedUrls(repository, entry);
+    downloadUrl ??= derived.downloadUrl;
+    sourceUrl ??= derived.sourceUrl;
+    changelogUrl ??= derived.changelogUrl;
   } else if (sourceUrl === null) {
-    return { status: 'broken', reason: 'Required field “sourceUrl” is missing.' };
+    return broken('Required field “sourceUrl” is missing.');
   }
-  if (downloadUrl === null) return { status: 'broken', reason: 'Required field “downloadUrl” is missing.' };
+  if (downloadUrl === null) return broken('Required field “downloadUrl” is missing.');
 
-  const pinned = isOnAllowlistedHost(meta.pinnedUrl) && COMMIT_SEGMENT.test(/** @type {string} */ (meta.pinnedUrl))
+  const pinned = isAllowlisted(meta.pinnedUrl) && COMMIT_SEGMENT.test(/** @type {string} */ (meta.pinnedUrl))
     ? /** @type {string} */ (meta.pinnedUrl)
     : null;
 
@@ -206,7 +227,7 @@ export function readPluginMetadata(body, entry, repository) {
       downloadUrl,
       requirements: stringArray(meta.requirements),
       tags: stringArray(meta.tags).map((t) => t.trim()).filter(Boolean),
-      icon: isOnAllowlistedHost(meta.icon) ? /** @type {string} */ (meta.icon) : null,
+      icon: isAllowlisted(meta.icon) ? /** @type {string} */ (meta.icon) : null,
       license: stringOrNull(meta.license),
       issuesUrl: isHttps(meta.issuesUrl) ? /** @type {string} */ (meta.issuesUrl) : `${repoUrl(repository)}/issues`,
       featured: meta.featured === true,
@@ -360,16 +381,18 @@ export function historyUrl(p) {
 }
 
 /**
- * Where the version label points: a stated versionUrl, else the Hosted
- * `<Name>/v<version>` tag, else the file history (labelled honestly).
+ * Where the version label points: a stated versionUrl, else the Content
+ * Repository's `<Name>/v<version>` tag for Hosted entries, else the file
+ * history (labelled honestly).
  * @param {Pick<Plugin, 'versionUrl' | 'kind' | 'servedFrom' | 'entryName' | 'version'>} p
+ * @param {Repository} repository
  * @returns {{ href: string, title: string } | null}
  */
-export function versionLink(p) {
+export function versionLink(p, repository) {
   const exact = 'This version in the repository';
   if (p.versionUrl) return { href: p.versionUrl, title: exact };
-  if (p.kind === 'hosted' && p.servedFrom) {
-    return { href: `https://github.com/${p.servedFrom}/tree/${p.entryName}/v${p.version}/Plugins/${p.entryName}`, title: exact };
+  if (p.kind === 'hosted') {
+    return { href: `${repoUrl(repository)}/tree/${p.entryName}/v${p.version}/Plugins/${p.entryName}`, title: exact };
   }
   const history = historyUrl(p);
   return history ? { href: history, title: 'No per-version link for this plugin; opens its change history' } : null;

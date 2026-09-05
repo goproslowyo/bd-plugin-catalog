@@ -936,7 +936,7 @@ function folderHint() {
 
 /** @param {Plugin} p */
 function sheetHeader(p) {
-  const ver = versionLink(p, REPOSITORY);
+  const ver = versionLink(p);
   const verNode = ver
     ? extLink(ver.href, { class: 'mono num', title: ver.title }, `v${p.version}`)
     : h('span', { class: 'mono num', text: `v${p.version}` });

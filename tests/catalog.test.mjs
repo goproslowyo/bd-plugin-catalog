@@ -309,13 +309,17 @@ test('passesHeaderCheck looks at the first kilobyte for a META header', () => {
 
 /* ---------- links ---------- */
 
-test('versionLink: stated versionUrl, else the Hosted tag, else the file history with an honest title', () => {
-  const hosted = { ...plugin({ id: 'hosted-derived', name: 'HostedDerived' }), kind: 'hosted', servedFrom: 'Pharaoh2k/BetterDiscordStuff', version: '1.0.0' };
-  assert.deepEqual(versionLink(hosted, REPO), { href: 'https://github.com/goproslowyo/bd-plugins/tree/HostedDerived/v1.0.0/Plugins/HostedDerived', title: 'This version in the repository' });
+test('versionLink: stated versionUrl, else the artifact at the Pinned Copy commit, else the file history with an honest title', () => {
+  const exact = 'This version in the repository';
+  const pinnedUrl = 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/75c20e7/Plugins/BetterPinDMs/BetterPinDMs.plugin.js';
+  const hosted = { ...plugin({ id: 'hosted-derived', name: 'HostedDerived' }), kind: 'hosted', servedFrom: 'goproslowyo/bd-plugins' };
+  assert.deepEqual(versionLink({ ...hosted, pinnedUrl }), { href: 'https://github.com/goproslowyo/bd-plugins/blob/75c20e7/Plugins/HostedDerived/HostedDerived.plugin.js', title: exact });
+  assert.deepEqual(versionLink(hosted), { href: 'https://github.com/goproslowyo/bd-plugins/commits/main/Plugins/HostedDerived/HostedDerived.plugin.js', title: 'No per-version link for this plugin; opens its change history' });
   const external = { ...plugin({ id: 'better-pin-dms', name: 'BetterPinDMs' }), servedFrom: 'Pharaoh2k/BetterDiscordStuff' };
-  assert.deepEqual(versionLink(external, REPO), { href: 'https://github.com/Pharaoh2k/BetterDiscordStuff/commits/main/Plugins/BetterPinDMs/BetterPinDMs.plugin.js', title: 'No per-version link for this plugin; opens its change history' });
-  assert.deepEqual(versionLink({ ...external, versionUrl: 'https://example.com/v1' }, REPO), { href: 'https://example.com/v1', title: 'This version in the repository' });
-  assert.equal(versionLink({ ...external, servedFrom: null }, REPO), null);
+  assert.deepEqual(versionLink({ ...external, pinnedUrl }), { href: 'https://github.com/goproslowyo/bd-plugins/blob/75c20e7/Plugins/BetterPinDMs/BetterPinDMs.plugin.js', title: exact });
+  assert.deepEqual(versionLink(external), { href: 'https://github.com/Pharaoh2k/BetterDiscordStuff/commits/main/Plugins/BetterPinDMs/BetterPinDMs.plugin.js', title: 'No per-version link for this plugin; opens its change history' });
+  assert.deepEqual(versionLink({ ...external, pinnedUrl, versionUrl: 'https://example.com/v1' }), { href: 'https://example.com/v1', title: exact });
+  assert.equal(versionLink({ ...external, servedFrom: null }), null);
 });
 
 test('historyUrl uses the served-from repository and the manifest name', () => {

@@ -383,18 +383,17 @@ export function historyUrl(p) {
 }
 
 /**
- * Where the version label points: a stated versionUrl, else the Content
- * Repository's `<Name>/v<version>` tag for Hosted entries, else the file
- * history (labelled honestly).
- * @param {Pick<Plugin, 'versionUrl' | 'kind' | 'servedFrom' | 'entryName' | 'version'>} p
- * @param {Repository} repository
+ * Where the version label points: a stated versionUrl, else the artifact at
+ * its Pinned Copy's commit, else the file history (labelled honestly).
+ * @param {Pick<Plugin, 'versionUrl' | 'pinnedUrl' | 'servedFrom' | 'entryName'>} p
  * @returns {{ href: string, title: string } | null}
  */
-export function versionLink(p, repository) {
+export function versionLink(p) {
   const exact = 'This version in the repository';
   if (p.versionUrl) return { href: p.versionUrl, title: exact };
-  if (p.kind === 'hosted') {
-    return { href: `${repoUrl(repository)}/tree/${p.entryName}/v${p.version}/Plugins/${p.entryName}`, title: exact };
+  const pinned = pinnedCommit(p.pinnedUrl);
+  if (pinned) {
+    return { href: `https://github.com/${pinned.repository}/blob/${pinned.sha}/Plugins/${p.entryName}/${p.entryName}.plugin.js`, title: exact };
   }
   const history = historyUrl(p);
   return history ? { href: history, title: 'No per-version link for this plugin; opens its change history' } : null;

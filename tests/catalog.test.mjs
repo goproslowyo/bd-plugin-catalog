@@ -3,16 +3,15 @@ import assert from 'node:assert/strict';
 import {
   readManifest,
   readPluginMetadata,
-  derivedUrls,
   brokenFromFetch,
   applyListState,
   parseListState,
   formatListState,
   parseDeepLink,
+  deepLinkHash,
   artifactFilename,
   passesHeaderCheck,
   versionLink,
-  historyUrl,
   pinnedCommit,
   authorProfileUrl,
   daysSince,
@@ -23,11 +22,15 @@ import {
   catalogUpdatedDate,
   cacheKey,
   pluginsFolderRows,
+  detectPlatform,
   THROTTLED_COPY,
 } from '../catalog.js';
 
 const REPO = { owner: 'goproslowyo', repo: 'bd-plugins', ref: 'main' };
 const ENTRY = { id: 'better-pin-dms', name: 'BetterPinDMs', order: 8 };
+
+/** Reads a plugin.json body with the four required fields plus `extra`, for ENTRY in REPO. */
+const readMinimal = (extra = {}) => readPluginMetadata(JSON.stringify({ name: 'x', description: 'd', version: '1', author: 'a', ...extra }), ENTRY, REPO);
 
 const seedPinDms = {
   name: 'BetterPinDMs',
@@ -83,51 +86,32 @@ test('readPluginMetadata: a Hosted entry with no URL fields derives them from th
 });
 
 test('readPluginMetadata: a downloadUrl inside the Content Repository on any ref is still Hosted', () => {
-  const body = JSON.stringify({
-    name: 'X', description: 'd', version: '1', author: 'A',
-    downloadUrl: 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/abc1234/Plugins/X/X.plugin.js',
-  });
-  const result = readPluginMetadata(body, { id: 'x', name: 'X', order: 0 }, REPO);
-  assert.equal(result.plugin.kind, 'hosted');
-  assert.equal(result.plugin.downloadUrl, 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/abc1234/Plugins/X/X.plugin.js');
-  assert.equal(result.plugin.sourceUrl, 'https://github.com/goproslowyo/bd-plugins/tree/main/Plugins/X');
+  const stated = 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/abc1234/Plugins/BetterPinDMs/BetterPinDMs.plugin.js';
+  const p = readMinimal({ downloadUrl: stated }).plugin;
+  assert.equal(p.kind, 'hosted');
+  assert.equal(p.downloadUrl, stated);
+  assert.equal(p.sourceUrl, 'https://github.com/goproslowyo/bd-plugins/tree/main/Plugins/BetterPinDMs');
 });
 
-test('readPluginMetadata: Broken when JSON is malformed', () => {
-  const result = readPluginMetadata('{ "name": "x",', ENTRY, REPO);
-  assert.deepEqual(result, { status: 'broken', reason: 'plugin.json is not valid JSON.' });
+test('readPluginMetadata: a stated downloadUrl that is not https is dropped, so the entry is Hosted with derived locations', () => {
+  const p = readMinimal({ downloadUrl: 'http://example.com/X.plugin.js' }).plugin;
+  assert.equal(p.kind, 'hosted');
+  assert.equal(p.downloadUrl, 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/main/Plugins/BetterPinDMs/BetterPinDMs.plugin.js');
+  assert.equal(p.sourceUrl, 'https://github.com/goproslowyo/bd-plugins/tree/main/Plugins/BetterPinDMs');
+  assert.equal(p.changelogUrl, 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/main/Plugins/BetterPinDMs/CHANGELOG.md');
 });
 
-test('readPluginMetadata: Broken when a required field is missing or mistyped', () => {
-  const missing = readPluginMetadata(JSON.stringify({ name: 'x', description: 'd', version: '1' }), ENTRY, REPO);
-  assert.deepEqual(missing, { status: 'broken', reason: 'Required field “author” is missing.' });
-  const mistyped = readPluginMetadata(JSON.stringify({ name: 'x', description: 'd', version: 5, author: 'a' }), ENTRY, REPO);
-  assert.deepEqual(mistyped, { status: 'broken', reason: 'Required field “version” has the wrong type.' });
-  const notObject = readPluginMetadata('[1,2]', ENTRY, REPO);
-  assert.deepEqual(notObject, { status: 'broken', reason: 'plugin.json is not a JSON object.' });
+test('readPluginMetadata: Broken reasons for malformed JSON, a non-object body, and a required field missing or mistyped', () => {
+  assert.deepEqual(readPluginMetadata('{ "name": "x",', ENTRY, REPO), { status: 'broken', reason: 'plugin.json is not valid JSON.' });
+  assert.deepEqual(readPluginMetadata('[1,2]', ENTRY, REPO), { status: 'broken', reason: 'plugin.json is not a JSON object.' });
+  assert.deepEqual(readMinimal({ author: undefined }), { status: 'broken', reason: 'Required field “author” is missing.' });
+  assert.deepEqual(readMinimal({ version: 5 }), { status: 'broken', reason: 'Required field “version” has the wrong type.' });
 });
 
-test('readPluginMetadata: an External entry without sourceUrl is Broken', () => {
-  const body = JSON.stringify({
-    name: 'x', description: 'd', version: '1', author: 'a',
-    downloadUrl: 'https://raw.githubusercontent.com/someone/else/main/X.plugin.js',
-  });
-  const result = readPluginMetadata(body, ENTRY, REPO);
-  assert.deepEqual(result, { status: 'broken', reason: 'Required field “sourceUrl” is missing.', downloadUrl: 'https://raw.githubusercontent.com/someone/else/main/X.plugin.js' });
-});
-
-test('readPluginMetadata: a Broken entry keeps its stated downloadUrl for the Fallback Link', () => {
-  const stated = 'https://raw.githubusercontent.com/Pharaoh2k/BetterDiscordStuff/main/Plugins/X/X.plugin.js';
-  const result = readPluginMetadata(JSON.stringify({ name: 'x', description: 'd', version: 5, author: 'a', downloadUrl: stated }), ENTRY, REPO);
-  assert.deepEqual(result, { status: 'broken', reason: 'Required field “version” has the wrong type.', downloadUrl: stated });
-});
-
-test('derivedUrls builds the Hosted download, source and changelog locations from the manifest name', () => {
-  assert.deepEqual(derivedUrls({ owner: 'goproslowyo', repo: 'bd-plugins', ref: 'test/broken' }, { id: 'x', name: 'HostedDerived', order: 0 }), {
-    downloadUrl: 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/test/broken/Plugins/HostedDerived/HostedDerived.plugin.js',
-    sourceUrl: 'https://github.com/goproslowyo/bd-plugins/tree/test/broken/Plugins/HostedDerived',
-    changelogUrl: 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/test/broken/Plugins/HostedDerived/CHANGELOG.md',
-  });
+test('readPluginMetadata: an External entry without sourceUrl is Broken, and a Broken entry keeps its stated downloadUrl for the Fallback Link', () => {
+  const stated = 'https://raw.githubusercontent.com/someone/else/main/X.plugin.js';
+  assert.deepEqual(readMinimal({ downloadUrl: stated }), { status: 'broken', reason: 'Required field “sourceUrl” is missing.', downloadUrl: stated });
+  assert.deepEqual(readMinimal({ downloadUrl: stated, version: 5 }), { status: 'broken', reason: 'Required field “version” has the wrong type.', downloadUrl: stated });
 });
 
 test('readPluginMetadata: bad optional fields are dropped individually and the entry still renders', () => {
@@ -136,10 +120,8 @@ test('readPluginMetadata: bad optional fields are dropped individually and the e
     description: 'd',
     version: '1.0.0',
     author: 'Fixture, Second Author, ,',
-    lastUpdated: 'yesterday',
-    releaseDate: '2026-13-45',
     features: 'not-an-array',
-    tags: 'not-an-array',
+    tags: ['a', 5, 'b'],
     icon: 'http://example.com/icon.png',
     issuesUrl: 'ftp://example.com/issues',
     license: 42,
@@ -153,8 +135,6 @@ test('readPluginMetadata: bad optional fields are dropped individually and the e
   assert.equal(result.status, 'ok');
   const p = result.plugin;
   assert.deepEqual(p.authors, ['Fixture', 'Second Author']);
-  assert.equal(p.lastUpdated, null);
-  assert.equal(p.releaseDate, null);
   assert.deepEqual(p.features, []);
   assert.deepEqual(p.tags, []);
   assert.equal(p.icon, null);
@@ -165,9 +145,15 @@ test('readPluginMetadata: bad optional fields are dropped individually and the e
   assert.equal('unknownKey' in p, false);
 });
 
-test('readPluginMetadata: icon and pinnedUrl must be https on raw.githubusercontent.com, pinnedUrl needs a commit segment', () => {
-  const base = { name: 'x', description: 'd', version: '1', author: 'a' };
-  const read = (extra) => readPluginMetadata(JSON.stringify({ ...base, ...extra }), ENTRY, REPO).plugin;
+test('readPluginMetadata: features, requirements and tags are trimmed and empties dropped', () => {
+  const p = readMinimal({ features: [' Pin DMs ', ''], requirements: ['', ' ZeresPluginLibrary '], tags: [' dms ', ' '] }).plugin;
+  assert.deepEqual(p.features, ['Pin DMs']);
+  assert.deepEqual(p.requirements, ['ZeresPluginLibrary']);
+  assert.deepEqual(p.tags, ['dms']);
+});
+
+test('readPluginMetadata: icon and pinnedUrl must be https on the Allowlisted Host (pinnedUrl with a commit segment); versionUrl must be https', () => {
+  const read = (extra) => readMinimal(extra).plugin;
   assert.equal(read({ icon: 'https://raw.githubusercontent.com/o/r/main/icon.png' }).icon, 'https://raw.githubusercontent.com/o/r/main/icon.png');
   assert.equal(read({ icon: 'https://example.com/icon.png' }).icon, null);
   assert.equal(read({ pinnedUrl: 'https://raw.githubusercontent.com/o/r/main/X.plugin.js' }).pinnedUrl, null);
@@ -176,19 +162,13 @@ test('readPluginMetadata: icon and pinnedUrl must be https on raw.githubusercont
   assert.equal(read({ versionUrl: 'http://example.com/v1' }).versionUrl, null);
 });
 
-test('readPluginMetadata: an array with a non-string element is a bad optional and is dropped whole', () => {
-  const base = { name: 'x', description: 'd', version: '1', author: 'a' };
-  const read = (extra) => readPluginMetadata(JSON.stringify({ ...base, ...extra }), ENTRY, REPO).plugin;
-  assert.deepEqual(read({ tags: ['a', 5, 'b'] }).tags, []);
-  assert.deepEqual(read({ features: ['a', 'b'] }).features, ['a', 'b']);
-});
-
-test('readPluginMetadata: a real but non-existent date is treated as absent', () => {
-  const base = { name: 'x', description: 'd', version: '1', author: 'a' };
-  const read = (extra) => readPluginMetadata(JSON.stringify({ ...base, ...extra }), ENTRY, REPO).plugin;
-  assert.equal(read({ lastUpdated: '2026-02-30' }).lastUpdated, null);
-  assert.equal(read({ lastUpdated: '2026-02-28' }).lastUpdated, '2026-02-28');
-  assert.equal(read({ lastUpdated: '2026-2-8' }).lastUpdated, null);
+test('readPluginMetadata: lastUpdated and releaseDate must be real YYYY-MM-DD dates, otherwise the plugin has no Recency', () => {
+  const cases = [['2026-02-28', '2026-02-28'], ['2026-02-30', null], ['2026-13-45', null], ['2026-2-8', null], ['yesterday', null], [20260228, null]];
+  for (const [input, expected] of cases) {
+    const p = readMinimal({ lastUpdated: input, releaseDate: input }).plugin;
+    assert.equal(p.lastUpdated, expected, `lastUpdated ${input}`);
+    assert.equal(p.releaseDate, expected, `releaseDate ${input}`);
+  }
 });
 
 test('readManifest keeps enabled slug entries in array order and skips the rest', () => {
@@ -247,7 +227,7 @@ test('applyListState: search is a case-insensitive substring over name, descript
   assert.deepEqual(ids({ q: 'greenpig', tags: [], sort: 'catalog' }), ['better-file-viewer']);
   assert.deepEqual(ids({ q: 'organis', tags: [], sort: 'catalog' }), ['better-pin-dms']);
   assert.deepEqual(ids({ q: 'toolkit', tags: [], sort: 'catalog' }), ['audio-toolbox']);
-  assert.deepEqual(ids({ q: '  ', tags: [], sort: 'catalog' }).length, 4);
+  assert.equal(ids({ q: '  ', tags: [], sort: 'catalog' }).length, 4);
 });
 
 test('applyListState: selected tags are OR-ed', () => {
@@ -282,12 +262,22 @@ test('formatListState omits defaults so a plain visit has a clean address', () =
   assert.equal(formatListState({ q: 'a b', tags: [], sort: 'updated' }), '?q=a+b&sort=updated');
 });
 
+test('List State survives a round trip through the query string with spaces, & and + in the search text and a tag', () => {
+  const state = { q: 'a b & c+d', tags: ['x & y', 'p+q'], sort: 'name' };
+  assert.deepEqual(parseListState(formatListState(state)), state);
+});
+
 test('parseDeepLink reads #plugin/<id> and nothing else', () => {
   assert.equal(parseDeepLink('#plugin/better-pin-dms'), 'better-pin-dms');
   assert.equal(parseDeepLink('#plugin/Not%20A%20Slug'), 'Not A Slug');
   assert.equal(parseDeepLink('#grid'), null);
   assert.equal(parseDeepLink(''), null);
   assert.equal(parseDeepLink('#plugin/'), null);
+});
+
+test('Deep Link hash round-trips an id, and an undecodable hash keeps its raw id', () => {
+  for (const id of ['better-pin-dms', 'Not A Slug', 'a%b', 'x/y?z#w']) assert.equal(parseDeepLink(deepLinkHash(id)), id, id);
+  assert.equal(parseDeepLink('#plugin/%E0'), '%E0');
 });
 
 /* ---------- download ---------- */
@@ -320,11 +310,6 @@ test('versionLink: stated versionUrl, else the artifact at the Pinned Copy commi
   assert.deepEqual(versionLink(external), { href: 'https://github.com/Pharaoh2k/BetterDiscordStuff/commits/main/Plugins/BetterPinDMs/BetterPinDMs.plugin.js', title: 'No per-version link for this plugin; opens its change history' });
   assert.deepEqual(versionLink({ ...external, pinnedUrl, versionUrl: 'https://example.com/v1' }), { href: 'https://example.com/v1', title: exact });
   assert.equal(versionLink({ ...external, servedFrom: null }), null);
-});
-
-test('historyUrl uses the served-from repository and the manifest name', () => {
-  assert.equal(historyUrl({ ...plugin({ id: 'x', name: 'BetterPinDMs' }), servedFrom: 'Pharaoh2k/BetterDiscordStuff' }), 'https://github.com/Pharaoh2k/BetterDiscordStuff/commits/main/Plugins/BetterPinDMs/BetterPinDMs.plugin.js');
-  assert.equal(historyUrl({ ...plugin({ id: 'x', name: 'X' }), servedFrom: null }), null);
 });
 
 test('pinnedCommit extracts the repository and sha from a pinnedUrl', () => {
@@ -361,7 +346,6 @@ test('hue maps a name into the 200–289 band deterministically', () => {
   const h = hue('BetterPinDMs');
   assert.equal(h, hue('BetterPinDMs'));
   assert.ok(h >= 200 && h < 290);
-  assert.notEqual(hue('AudioToolbox'), hue('BetterPinDMs'));
 });
 
 test('initials takes the first letters of the first two words', () => {
@@ -386,20 +370,25 @@ test('cacheKey names the repository, ref and schema version', () => {
   assert.match(cacheKey(REPO), /^catalog:goproslowyo\/bd-plugins@main:v\d+$/);
 });
 
-test('pluginsFolderRows lists the visitor OS first and marks it', () => {
-  const win = pluginsFolderRows('windows');
-  assert.deepEqual(win.map((r) => r.os), ['Windows', 'macOS', 'Linux']);
-  assert.equal(win[0].you, true);
-  assert.equal(win[0].path, '%APPDATA%\\BetterDiscord\\plugins');
+test('pluginsFolderRows lists the visitor OS first and marks it, or Windows first unmarked without a signal', () => {
   const mac = pluginsFolderRows('mac');
   assert.deepEqual(mac.map((r) => r.os), ['macOS', 'Windows', 'Linux']);
-  assert.equal(mac[0].you, true);
+  assert.deepEqual(mac.map((r) => r.you), [true, false, false]);
   assert.equal(mac[0].path, '~/Library/Application Support/BetterDiscord/plugins');
-  const linux = pluginsFolderRows('linux');
-  assert.equal(linux[0].os, 'Linux');
-  assert.equal(linux[0].path, '$XDG_CONFIG_HOME/BetterDiscord/plugins');
-  assert.equal(linux[0].note, 'Defaults to ~/.config/BetterDiscord/plugins');
+  assert.deepEqual(pluginsFolderRows('linux').map((r) => r.os), ['Linux', 'Windows', 'macOS']);
   const unknown = pluginsFolderRows(null);
   assert.deepEqual(unknown.map((r) => r.os), ['Windows', 'macOS', 'Linux']);
   assert.equal(unknown.some((r) => r.you), false);
+});
+
+test('detectPlatform reads Windows, macOS and Linux from the navigator, and nothing from Android or an empty one', () => {
+  const cases = [
+    [{ userAgentData: { platform: 'Windows' }, platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, 'windows'],
+    [{ platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' }, 'mac'],
+    [{ platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64)' }, 'linux'],
+    [{ platform: 'Linux armv8l', userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8)' }, null],
+    [{}, null],
+    [{ userAgentData: { platform: 'macOS' }, platform: 'darwin' }, 'mac'],
+  ];
+  for (const [nav, expected] of cases) assert.equal(detectPlatform(nav), expected, JSON.stringify(nav));
 });

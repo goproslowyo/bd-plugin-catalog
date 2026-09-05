@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: https://raw.githubusercontent.com; connect-src https://raw.githubusercontent.com; font-src 'self'; base-uri 'none'; form-action 'none'">
   <meta name="description" content="A catalog of BetterDiscord plugins by GoProSlowYo. Search, filter by tag, and download the .plugin.js straight into your plugins folder.">
-  <meta name="color-scheme" content="dark light">
   <title>BetterDiscord Plugin Catalog</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -14,7 +13,7 @@
   <a class="skip" href="#grid">Skip to plugins</a>
 
   <div class="shell" id="shell">
-    <aside class="side" id="side" aria-label="Filters">
+    <aside class="side" aria-label="Filters">
       <div class="rail roving" id="rail" role="group" aria-label="Collapsed sidebar" aria-description="Use arrow keys to move between rail buttons">
         <span class="mark" aria-hidden="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2v6m6-6v6M6 8h12v3a6 6 0 0 1-12 0V8zm6 9v5"/></svg></span>
         <button type="button" class="btn btn-quiet" data-expand="search" tabindex="0" aria-label="Show search" title="Search (/)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
@@ -35,19 +34,19 @@
         <button type="button" class="btn btn-quiet fold" id="fold" tabindex="-1" aria-label="Hide filters" title="Hide filters ([)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/><path d="M4 4v16"/></svg></button>
       </div>
 
-      <label class="field search" for="q">
+      <label class="field" for="q">
         <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         <span class="sr-only">Search plugins</span>
         <input type="search" id="q" placeholder="Search plugins, authors, tags…" autocomplete="off" spellcheck="false">
         <kbd class="kbd" aria-hidden="true">/</kbd>
       </label>
 
-      <section class="side-section">
+      <section>
         <h2 id="tags-h">Tags <a href="#" id="clear-tags" hidden>clear</a></h2>
         <div class="taglist roving" id="taglist" role="group" aria-labelledby="tags-h" aria-description="Use arrow keys to move between tags, Enter or Space to toggle one"></div>
       </section>
 
-      <section class="side-section">
+      <section>
         <h2 id="sort-h">Sort</h2>
         <div class="seg roving" id="sort" role="group" aria-labelledby="sort-h" aria-description="Use arrow keys to move between sort options, Enter or Space to choose one">
           <button type="button" data-sort="catalog" aria-pressed="true" tabindex="0">Catalog</button>
@@ -57,9 +56,9 @@
       </section>
     </aside>
 
-    <main class="main" id="main">
+    <main class="main">
       <div class="toolbar" id="toolbar">
-        <span class="count" id="count" role="status" aria-live="polite"><strong class="num" id="count-shown">…</strong> of <span class="num" id="count-total">…</span> plugins</span>
+        <span class="count" role="status" aria-live="polite"><strong class="num" id="count-shown">…</strong> of <span class="num" id="count-total">…</span> plugins</span>
         <span class="active" id="active-tags"></span>
         <a class="clear" href="#" id="reset">Reset</a>
       </div>
@@ -69,7 +68,7 @@
     </main>
 
     <!-- After <main> in the DOM so its controls come last in the Tab order; laid out inside the sidebar column by CSS. -->
-    <footer class="side-foot" id="side-foot" aria-label="Catalog tools">
+    <footer class="side-foot" aria-label="Catalog tools">
       <a class="repo-link" id="repo-link" href="https://github.com/goproslowyo/bd-plugins" rel="noopener noreferrer"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg><span id="repo-name">goproslowyo/bd-plugins</span></a>
       <span id="catalog-updated" hidden>Catalog Updated <a id="catalog-updated-link" class="num" href="#" rel="noopener noreferrer" title="Catalog history"></a></span>
       <div class="row">
@@ -81,7 +80,7 @@
           <button type="button" data-density="1" aria-label="Larger cards" tabindex="-1"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         </span>
       </div>
-      <span class="hint-line">Press <kbd class="kbd">?</kbd> for shortcuts</span>
+      <span>Press <kbd class="kbd">?</kbd> for shortcuts</span>
     </footer>
   </div>
 

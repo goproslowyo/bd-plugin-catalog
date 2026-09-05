@@ -72,13 +72,13 @@ export function readManifest(manifest) {
  * @typedef {{ status: 'ok', plugin: Plugin } | { status: 'broken', reason: string, downloadUrl?: string, throttled?: boolean }} MetadataOutcome
  */
 
-export const RAW_HOST = 'https://raw.githubusercontent.com';
+const RAW_HOST = 'https://raw.githubusercontent.com';
 const ALLOWLISTED_HOSTS = ['raw.githubusercontent.com'];
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const COMMIT_SEGMENT = /\/[0-9a-f]{7,40}\//;
 
 /** @param {Repository} r */
-export const rawBase = (r) => `${RAW_HOST}/${r.owner}/${r.repo}/${r.ref}`;
+const rawBase = (r) => `${RAW_HOST}/${r.owner}/${r.repo}/${r.ref}`;
 /** @param {Repository} r */
 export const repoUrl = (r) => `https://github.com/${r.owner}/${r.repo}`;
 /** @param {Repository} r */
@@ -124,14 +124,14 @@ const stringOrNull = (v) => (typeof v === 'string' ? v : null);
  * Splits the comma-separated author string into author chips.
  * @param {string} s
  */
-export const splitAuthors = (s) => s.split(',').map((a) => a.trim()).filter(Boolean);
+const splitAuthors = (s) => s.split(',').map((a) => a.trim()).filter(Boolean);
 
 /**
  * `owner/repo` parsed from a GitHub URL, for the Served-from display and the history link.
  * @param {string | null} url
  * @returns {string | null}
  */
-export function servedFromRepository(url) {
+function servedFromRepository(url) {
   const m = typeof url === 'string' ? /^https:\/\/github\.com\/([^/]+\/[^/]+)/.exec(url) : null;
   return m ? m[1].replace(/\.git$/, '') : null;
 }
@@ -185,22 +185,24 @@ export function readPluginMetadata(body, entry, repository) {
   const insideRepository = `${RAW_HOST}/${repository.owner}/${repository.repo}/`;
   const kind = statedDownload === null || statedDownload.startsWith(insideRepository) ? 'hosted' : 'external';
 
-  /** @type {string | null} */
-  let downloadUrl = statedDownload;
-  /** @type {string | null} */
-  let sourceUrl = isHttps(meta.sourceUrl) ? /** @type {string} */ (meta.sourceUrl) : null;
+  const statedSource = isHttps(meta.sourceUrl) ? /** @type {string} */ (meta.sourceUrl) : null;
+  /** @type {string} */
+  let downloadUrl;
+  /** @type {string} */
+  let sourceUrl;
   /** @type {string | null} */
   let changelogUrl = isHttps(meta.changelogUrl) ? /** @type {string} */ (meta.changelogUrl) : null;
 
   if (kind === 'hosted') {
     const derived = derivedUrls(repository, entry);
-    downloadUrl ??= derived.downloadUrl;
-    sourceUrl ??= derived.sourceUrl;
+    downloadUrl = statedDownload ?? derived.downloadUrl;
+    sourceUrl = statedSource ?? derived.sourceUrl;
     changelogUrl ??= derived.changelogUrl;
-  } else if (sourceUrl === null) {
-    return broken('Required field “sourceUrl” is missing.');
+  } else {
+    if (statedSource === null) return broken('Required field “sourceUrl” is missing.');
+    downloadUrl = /** @type {string} */ (statedDownload);
+    sourceUrl = statedSource;
   }
-  if (downloadUrl === null) return broken('Required field “downloadUrl” is missing.');
 
   const pinned = isAllowlisted(meta.pinnedUrl) && COMMIT_SEGMENT.test(/** @type {string} */ (meta.pinnedUrl))
     ? /** @type {string} */ (meta.pinnedUrl)
@@ -495,7 +497,7 @@ export function catalogUpdatedDate(plugins) {
 }
 
 /** Bump whenever the parsed Plugin shape changes, so stale sessionStorage is ignored. */
-export const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 1;
 
 /** @param {Repository} r */
 export const cacheKey = (r) => `catalog:${r.owner}/${r.repo}@${r.ref}:v${SCHEMA_VERSION}`;

@@ -34,7 +34,6 @@ import {
   detectPlatform,
   manifestUrl,
   metadataUrl,
-  rawBase,
   repoUrl,
   DEFAULT_LIST_STATE,
   THROTTLED_COPY,
@@ -83,7 +82,6 @@ function h(tag, attrs = {}, ...children) {
 
 /** @type {Record<string, Array<{ path?: string, circle?: [number, number, number], rect?: [number, number, number, number, number] }>>} */
 const ICONS = {
-  search: [{ circle: [11, 11, 7] }, { path: 'm20 20-3.5-3.5' }],
   chevron: [{ path: 'm9 6 6 6-6 6' }],
   down: [{ path: 'M12 4v12m0 0 5-5m-5 5-5-5M4 20h16' }],
   ext: [{ path: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6' }],
@@ -197,7 +195,6 @@ const session = storeNamed('sessionStorage');
 
 const els = {
   shell: byId('shell'),
-  side: byId('side'),
   rail: byId('rail'),
   railTagCount: byId('rail-tag-count'),
   fold: byId('fold'),

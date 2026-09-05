@@ -645,6 +645,7 @@ function renderSortSegments() {
     const key = /** @type {SortKey} */ (b.dataset.sort);
     const pressed = key === sort;
     b.setAttribute('aria-pressed', String(pressed));
+    b.tabIndex = pressed ? 0 : -1;
     b.querySelector('svg')?.remove();
     if (!pressed) {
       b.removeAttribute('aria-label');

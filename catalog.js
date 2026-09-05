@@ -270,7 +270,7 @@ export function brokenFromFetch(failure) {
 
 /* ---------- List State: search, tags, sort ---------- */
 
-export const SORT_KEYS = /** @type {const} */ (['updated', 'released', 'name']);
+const SORT_KEYS = /** @type {const} */ (['updated', 'released', 'name']);
 /** @typedef {typeof SORT_KEYS[number]} SortKey */
 /** @typedef {'asc' | 'desc'} SortDir */
 /** @typedef {{ q: string, tags: string[], sort: SortKey, dir: SortDir }} ListState */

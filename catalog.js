@@ -403,14 +403,14 @@ export function versionLink(p, repository) {
 /**
  * The Pinned Copy's repository and commit, from its raw URL.
  * @param {string | null} pinnedUrl
- * @returns {{ repository: string, sha: string, shortSha: string, commitUrl: string } | null}
+ * @returns {{ url: string, repository: string, sha: string, shortSha: string, commitUrl: string } | null}
  */
 export function pinnedCommit(pinnedUrl) {
   if (!pinnedUrl) return null;
   const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+\/[^/]+)\/([0-9a-f]{7,40})\//.exec(pinnedUrl);
   if (!m) return null;
   const [, repository, sha] = m;
-  return { repository, sha, shortSha: sha.slice(0, 7), commitUrl: `https://github.com/${repository}/commit/${sha}` };
+  return { url: pinnedUrl, repository, sha, shortSha: sha.slice(0, 7), commitUrl: `https://github.com/${repository}/commit/${sha}` };
 }
 
 /**

@@ -324,8 +324,9 @@ test('historyUrl uses the served-from repository and the manifest name', () => {
 });
 
 test('pinnedCommit extracts the repository and sha from a pinnedUrl', () => {
-  assert.deepEqual(pinnedCommit('https://raw.githubusercontent.com/goproslowyo/bd-plugins/75c20e7/Plugins/BetterPinDMs/BetterPinDMs.plugin.js'), {
-    repository: 'goproslowyo/bd-plugins', sha: '75c20e7', shortSha: '75c20e7', commitUrl: 'https://github.com/goproslowyo/bd-plugins/commit/75c20e7',
+  const url = 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/75c20e7/Plugins/BetterPinDMs/BetterPinDMs.plugin.js';
+  assert.deepEqual(pinnedCommit(url), {
+    url, repository: 'goproslowyo/bd-plugins', sha: '75c20e7', shortSha: '75c20e7', commitUrl: 'https://github.com/goproslowyo/bd-plugins/commit/75c20e7',
   });
   assert.equal(pinnedCommit('https://raw.githubusercontent.com/goproslowyo/bd-plugins/75c20e7f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f6a/X.plugin.js').shortSha, '75c20e7');
   assert.equal(pinnedCommit(null), null);

@@ -53,6 +53,8 @@ const COPY_FLASH_MS = 1200;
 const SKELETON_COUNT = 9;
 const DENSITY_MAX = 7;
 const SVG_NS = 'http://www.w3.org/2000/svg';
+/** A blank line separates paragraphs in a description. */
+const PARAGRAPH_BREAK = /\n\s*\n/;
 
 /* ============ DOM helpers ============ */
 
@@ -83,6 +85,16 @@ function h(tag, attrs = {}, ...children) {
 
 /** @type {Record<string, Array<{ path?: string, circle?: [number, number, number], rect?: [number, number, number, number, number] }>>} */
 const ICONS = {
+  mark: [{ path: 'M9 2v6m6-6v6M6 8h12v3a6 6 0 0 1-12 0V8zm6 9v5' }],
+  search: [{ circle: [11, 11, 7] }, { path: 'm20 20-3.5-3.5' }],
+  tags: [{ path: 'M3 5h18l-7 8v6l-4-2v-4L3 5z' }],
+  sort: [{ path: 'M4 7h16M7 12h10M10 17h4' }],
+  sun: [{ circle: [12, 12, 4] }, { path: 'M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4' }],
+  moon: [{ path: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z' }],
+  fold: [{ path: 'M15 6l-6 6 6 6' }, { path: 'M4 4v16' }],
+  expand: [{ path: 'm9 6 6 6-6 6' }, { path: 'M20 4v16' }],
+  minus: [{ path: 'M5 12h14' }],
+  plus: [{ path: 'M12 5v14M5 12h14' }],
   chevron: [{ path: 'm9 6 6 6-6 6' }],
   down: [{ path: 'M12 4v12m0 0 5-5m-5 5-5-5M4 20h16' }],
   ext: [{ path: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6' }],
@@ -141,9 +153,13 @@ function byId(id) {
   return el;
 }
 
-/** @param {HTMLElement} el */
-function clear(el) {
-  while (el.firstChild) el.removeChild(el.firstChild);
+/**
+ * Focuses the first match inside `root`, if any.
+ * @param {ParentNode} root
+ * @param {string} selector
+ */
+function focusIn(root, selector) {
+  /** @type {HTMLElement | null} */ (root.querySelector(selector))?.focus();
 }
 
 /**
@@ -283,7 +299,7 @@ function setCollapsed(collapsed, focusAfter = true) {
   storage.set(local, 'sidebar', collapsed ? 'collapsed' : 'expanded');
   renderActiveTags();
   if (!focusAfter) return;
-  if (collapsed) /** @type {HTMLElement | null} */ (els.rail.querySelector('[data-expand="fold"]'))?.focus();
+  if (collapsed) focusIn(els.rail, '[data-expand="fold"]');
   else els.fold.focus();
 }
 
@@ -292,7 +308,7 @@ function setDensity(level) {
   state.density = Math.min(DENSITY_MAX, Math.max(1, level));
   els.shell.style.setProperty('--lvl', String(state.density));
   storage.set(local, 'density', String(state.density));
-  clear(els.densityBars);
+  els.densityBars.replaceChildren();
   for (let i = 0; i < DENSITY_MAX; i += 1) {
     const bar = h('i', { class: i < state.density ? 'on' : '' });
     bar.style.height = `${6 + i * 2}px`;
@@ -326,7 +342,9 @@ async function fetchText(url, init = {}) {
 }
 
 /** @param {FetchOutcome} outcome */
-const isThrottled = (outcome) => !outcome.ok && outcome.failure.kind === 'http' && outcome.failure.status === 429;
+function isThrottled(outcome) {
+  return !outcome.ok && outcome.failure.kind === 'http' && outcome.failure.status === 429;
+}
 
 /* ============ Catalog cache ============ */
 
@@ -344,10 +362,8 @@ function readCache() {
 }
 
 function writeCache() {
-  /** @type {Record<string, Outcome>} */
-  const outcomes = {};
-  for (const [id, outcome] of state.outcomes) outcomes[id] = outcome;
-  storage.set(session, cacheKey(REPOSITORY), JSON.stringify({ savedAt: Date.now(), manifest: { entries: state.entries }, entries: outcomes }));
+  const entries = Object.fromEntries(state.outcomes);
+  storage.set(session, cacheKey(REPOSITORY), JSON.stringify({ savedAt: Date.now(), manifest: { entries: state.entries }, entries }));
 }
 
 function clearCache() {
@@ -432,21 +448,27 @@ async function retryEntries(ids) {
   await Promise.allSettled(entries.map((entry) => loadEntry(entry, { cache: 'reload' })));
   writeCache();
   for (const entry of entries) replaceCard(entry.id);
-  renderTags();
-  renderFooterDate();
-  applyList();
-  renderBanner();
+  renderDerived();
 }
 
 /* ============ Rendering: page states ============ */
 
+/**
+ * Empties the grid and the banner slot before a page state or the Catalog is drawn.
+ * @param {{ busy: boolean }} opts   whether the grid is about to be filled asynchronously
+ */
+function resetGrid({ busy }) {
+  els.bannerSlot.replaceChildren();
+  els.grid.replaceChildren();
+  state.cards = new Map();
+  if (busy) els.grid.setAttribute('aria-busy', 'true');
+  else els.grid.removeAttribute('aria-busy');
+}
+
 function showSkeleton() {
   els.fullstate.hidden = true;
   els.toolbar.hidden = false;
-  clear(els.bannerSlot);
-  clear(els.grid);
-  state.cards = new Map();
-  els.grid.setAttribute('aria-busy', 'true');
+  resetGrid({ busy: true });
   els.countShown.textContent = '…';
   els.countTotal.textContent = '…';
   for (let i = 0; i < SKELETON_COUNT; i += 1) {
@@ -466,11 +488,8 @@ function showSkeleton() {
  */
 function showFullState(kind) {
   els.toolbar.hidden = true;
-  clear(els.bannerSlot);
-  clear(els.grid);
-  els.grid.removeAttribute('aria-busy');
-  state.cards = new Map();
-  clear(els.fullstate);
+  resetGrid({ busy: false });
+  els.fullstate.replaceChildren();
   const tryAgain = h('button', { type: 'button', class: 'btn btn-primary', onclick: () => loadCatalog({ reload: true }) }, icon('refresh'), kind === 'throttled' ? 'Retry' : 'Try again');
   const repoName = `${REPOSITORY.owner}/${REPOSITORY.repo}`;
   /** @type {HTMLElement[]} */
@@ -503,9 +522,7 @@ function showFullState(kind) {
 function renderCatalog() {
   els.fullstate.hidden = true;
   els.toolbar.hidden = false;
-  clear(els.grid);
-  els.grid.removeAttribute('aria-busy');
-  state.cards = new Map();
+  resetGrid({ busy: false });
   let i = 0;
   for (const entry of state.entries) {
     const outcome = state.outcomes.get(entry.id);
@@ -520,11 +537,16 @@ function renderCatalog() {
     i += 1;
   }
   state.firstRender = false;
+  renderDerived();
+  openFromHash();
+}
+
+/** Everything drawn from the outcomes besides the cards themselves. */
+function renderDerived() {
   renderTags();
   renderFooterDate();
   applyList();
   renderBanner();
-  openFromHash();
 }
 
 /** @param {string} id */
@@ -540,13 +562,10 @@ function replaceCard(id) {
 
 /** The plugins that loaded, in manifest order. */
 function okPlugins() {
-  /** @type {Plugin[]} */
-  const out = [];
-  for (const entry of state.entries) {
+  return state.entries.flatMap((entry) => {
     const o = state.outcomes.get(entry.id);
-    if (o?.status === 'ok') out.push(o.plugin);
-  }
-  return out;
+    return o?.status === 'ok' ? [o.plugin] : [];
+  });
 }
 
 /**
@@ -565,14 +584,11 @@ function brokenStandIn(entry) {
 
 /** Everything with a card, in manifest order. */
 function cardModels() {
-  /** @type {Plugin[]} */
-  const out = [];
-  for (const entry of state.entries) {
+  return state.entries.flatMap((entry) => {
     const o = state.outcomes.get(entry.id);
-    if (!o) continue;
-    out.push(o.status === 'ok' ? o.plugin : brokenStandIn(entry));
-  }
-  return out;
+    if (!o) return [];
+    return [o.status === 'ok' ? o.plugin : brokenStandIn(entry)];
+  });
 }
 
 /** Filters, sorts and counts the grid for the current List State; never rebuilds cards. */
@@ -614,7 +630,7 @@ function updateList(patch) {
 function renderTags() {
   const tags = collectTags(okPlugins());
   const focusedTag = /** @type {HTMLElement | null} */ (els.taglist.querySelector('[tabindex="0"]'))?.dataset.tag;
-  clear(els.taglist);
+  els.taglist.replaceChildren();
   if (tags.length === 0) {
     els.taglist.append(h('span', { class: 'empty', text: 'No tags yet' }));
     return;
@@ -638,7 +654,7 @@ function toggleTag(tag) {
 }
 
 function renderActiveTags() {
-  clear(els.activeTags);
+  els.activeTags.replaceChildren();
   if (!state.collapsed) return;
   for (const tag of state.list.tags) {
     els.activeTags.append(
@@ -659,14 +675,11 @@ function renderFooterDate() {
 }
 
 function brokenIds() {
-  /** @type {string[]} */
-  const ids = [];
-  for (const entry of state.entries) if (state.outcomes.get(entry.id)?.status === 'broken') ids.push(entry.id);
-  return ids;
+  return state.entries.filter((entry) => state.outcomes.get(entry.id)?.status === 'broken').map((entry) => entry.id);
 }
 
 function renderBanner() {
-  clear(els.bannerSlot);
+  els.bannerSlot.replaceChildren();
   const failed = brokenIds();
   if (failed.length === 0 || state.bannerDismissed) return;
   const throttled = failed.some((id) => /** @type {{ throttled?: boolean }} */ (state.outcomes.get(id)).throttled);
@@ -710,7 +723,6 @@ function tile(p, large) {
   if (p.icon) {
     const img = h('img', { src: p.icon, alt: '', loading: 'lazy', decoding: 'async' });
     img.addEventListener('error', () => {
-      clear(t);
       t.textContent = initials(p.name);
     });
     t.append(img);
@@ -720,13 +732,24 @@ function tile(p, large) {
   return t;
 }
 
+/**
+ * How long ago a Recently Updated plugin changed, or null when it is not recent.
+ * @param {Plugin} p
+ * @param {Date} today
+ * @returns {{ days: number, ago: string } | null}
+ */
+function recencyPhrase(p, today) {
+  const days = daysSince(p.lastUpdated, today);
+  if (days === null || !isRecentlyUpdated(p.lastUpdated, today)) return null;
+  return { days, ago: `${days} ${days === 1 ? 'day' : 'days'} ago` };
+}
+
 /** @param {Plugin} p */
 function updatedBadge(p) {
-  const today = new Date();
-  if (!isRecentlyUpdated(p.lastUpdated, today)) return null;
-  const days = daysSince(p.lastUpdated, today) ?? 0;
-  const text = `Updated ${days} ${days === 1 ? 'day' : 'days'} ago`;
-  return h('span', { class: 'badge badge-updated', title: text }, icon('check'), h('span', { 'aria-hidden': 'true', text: `${days}d` }), h('span', { class: 'sr-only', text: text }));
+  const recent = recencyPhrase(p, new Date());
+  if (!recent) return null;
+  const text = `Updated ${recent.ago}`;
+  return h('span', { class: 'badge badge-updated', title: text }, icon('check'), h('span', { 'aria-hidden': 'true', text: `${recent.days}d` }), h('span', { class: 'sr-only', text }));
 }
 
 /** @param {Plugin} p */
@@ -758,10 +781,8 @@ function openControl(id, name, label) {
 function buildCard(entry, outcome) {
   if (outcome.status === 'broken') return buildBrokenCard(entry, outcome);
   const p = outcome.plugin;
-  const today = new Date();
-  const days = daysSince(p.lastUpdated, today);
-  const recent = isRecentlyUpdated(p.lastUpdated, today);
-  const label = `${p.name}, version ${p.version}${recent ? `, updated ${days} ${days === 1 ? 'day' : 'days'} ago` : ''}. Open details`;
+  const recent = recencyPhrase(p, new Date());
+  const label = `${p.name}, version ${p.version}${recent ? `, updated ${recent.ago}` : ''}. Open details`;
   const card = h('li', { class: 'card', 'data-id': p.id });
   card.style.setProperty('--h', String(hue(p.name)));
   const open = openControl(p.id, p.name, label);
@@ -770,7 +791,7 @@ function buildCard(entry, outcome) {
       tile(p, false),
       h('div', { class: 't' }, open, h('span', { class: 'ver mono num', text: `v${p.version}` })),
       h('span', { class: 'badges' }, featuredBadge(p), updatedBadge(p))),
-    h('p', { class: 'desc', text: p.description.split(/\n\s*\n/)[0] }),
+    h('p', { class: 'desc', text: p.description.split(PARAGRAPH_BREAK)[0] }),
   );
   if (p.tags.length) {
     card.append(h('div', { class: 'card-tags' }, ...p.tags.map((t) => h('button', { type: 'button', tabindex: '-1', title: `Show all ${t} plugins`, text: t, onclick: () => updateList({ tags: [t] }) }))));
@@ -815,11 +836,23 @@ function fallbackLink(url) {
   return extLink(url, { class: 'fallback' }, 'Open raw file ', icon('ext'));
 }
 
+/**
+ * A button that copies `text` on click. It flashes green itself unless a
+ * shared `flash` group is given, in which case every control in it flashes.
+ * @param {string} text
+ * @param {Record<string, unknown>} attrs
+ * @param {Array<Node | string>} children
+ * @param {HTMLElement[]} [flash]
+ */
+function copyButton(text, attrs, children, flash) {
+  const button = h('button', { type: 'button', ...attrs }, ...children);
+  button.addEventListener('click', () => copyText(text, flash ?? [button]));
+  return button;
+}
+
 /** Copies this page's Deep Link for a plugin. @param {string} id */
 function copyLinkButton(id) {
-  const button = h('button', { type: 'button', class: 'btn btn-quiet' }, icon('link'), 'Copy link');
-  button.addEventListener('click', () => copyText(pageDeepLink(id), [button]));
-  return button;
+  return copyButton(pageDeepLink(id), { class: 'btn btn-quiet' }, [icon('link'), 'Copy link']);
 }
 
 /**
@@ -842,7 +875,9 @@ async function copyText(text, flash) {
 }
 
 /** @param {string} id */
-const pageDeepLink = (id) => `${location.origin}${location.pathname}${deepLinkHash(id)}`;
+function pageDeepLink(id) {
+  return `${location.origin}${location.pathname}${deepLinkHash(id)}`;
+}
 
 /**
  * The Blob download flow with the Header Check.
@@ -854,9 +889,8 @@ const pageDeepLink = (id) => `${location.origin}${location.pathname}${deepLinkHa
  */
 async function saveArtifact(url, filename, button, stateEl, idleLabel) {
   const setState = /** @param {'idle' | 'fetching' | 'saved' | 'failed'} s @param {Node[]} [content] */ (s, content = []) => {
-    clear(stateEl);
     stateEl.className = `state${s === 'saved' ? ' ok' : s === 'failed' ? ' bad' : ''}`;
-    stateEl.append(...content);
+    stateEl.replaceChildren(...content);
     button.disabled = s === 'fetching';
     const label = /** @type {HTMLElement} */ (button.querySelector('.label'));
     label.textContent = s === 'fetching' ? 'Downloading…' : idleLabel;
@@ -889,21 +923,19 @@ function folderHint() {
   const rows = pluginsFolderRows(detectPlatform(navigator));
   const paths = h('div', { class: 'paths' });
   for (const row of rows) {
-    const code = h('code', { text: row.path });
-    const pathButton = h('button', { type: 'button', class: 'path', title: 'Click to copy', 'aria-label': `Copy ${row.os} path` }, code);
-    const copyButton = h('button', { type: 'button', class: 'btn btn-quiet copy-path', 'aria-label': `Copy ${row.os} path` }, icon('copy'));
-    const copy = () => copyText(row.path, [pathButton, copyButton]);
-    pathButton.addEventListener('click', copy);
-    copyButton.addEventListener('click', copy);
+    /** @type {HTMLElement[]} the path and its icon button flash together */
+    const pair = [];
+    const pathButton = copyButton(row.path, { class: 'path', title: 'Click to copy', 'aria-label': `Copy ${row.os} path` }, [h('code', { text: row.path })], pair);
+    const iconButton = copyButton(row.path, { class: 'btn btn-quiet copy-path', 'aria-label': `Copy ${row.os} path` }, [icon('copy')], pair);
+    pair.push(pathButton, iconButton);
     const label = h('b', { text: row.os, title: row.note ?? undefined });
-    paths.append(h('div', { class: 'pathline' }, label, h('span', { class: 'pathrow' }, pathButton, copyButton, row.you ? h('span', { class: 'you', text: 'you\'re probably here' }) : null)));
+    paths.append(h('div', { class: 'pathline' }, label, h('span', { class: 'pathrow' }, pathButton, iconButton, row.you ? h('span', { class: 'you', text: 'you\'re probably here' }) : null)));
   }
   return h('details', { class: 'hint' }, h('summary', {}, icon('chevron', 'chev'), icon('folder'), 'Where does the file go?'), paths);
 }
 
 /** @param {Plugin} p */
 function sheetHeader(p) {
-  const today = new Date();
   const ver = versionLink(p, REPOSITORY);
   const verNode = ver
     ? extLink(ver.href, { class: 'mono num', title: ver.title }, `v${p.version}`)
@@ -912,7 +944,7 @@ function sheetHeader(p) {
     const url = authorProfileUrl(a);
     return url ? extLink(url, { class: 'author', title: 'GitHub profile' }, a) : h('span', { class: 'author', text: a });
   });
-  const sub = h('div', { class: 'sub' }, verNode, ...authors, isRecentlyUpdated(p.lastUpdated, today) ? updatedBadge(p) : null, p.featured ? h('span', { class: 'badge badge-featured' }, icon('star'), 'Featured') : null);
+  const sub = h('div', { class: 'sub' }, verNode, ...authors, updatedBadge(p), p.featured ? h('span', { class: 'badge badge-featured' }, icon('star'), 'Featured') : null);
   return h('div', { class: 'd-head' }, closeButton(), tile(p, true), h('div', { class: 't' }, h('h2', { id: 'sheet-title', text: p.name }), sub));
 }
 
@@ -926,14 +958,12 @@ function sheetActions(p) {
     download.addEventListener('click', () => saveArtifact(p.downloadUrl, filename, download, stateEl, 'Download'));
     actions.append(download);
   }
-  const copyRaw = h('button', { type: 'button', class: 'btn', title: 'Copies the live URL' }, icon('copy'), 'Copy raw URL');
-  copyRaw.addEventListener('click', () => copyText(p.downloadUrl, [copyRaw]));
-  actions.append(copyRaw);
+  actions.append(copyButton(p.downloadUrl, { class: 'btn', title: 'Copies the live URL' }, [icon('copy'), 'Copy raw URL']));
   const pinned = pinnedCommit(p.pinnedUrl);
-  if (pinned && p.pinnedUrl) {
+  if (pinned) {
     const label = `Download snapshot ${pinned.shortSha}`;
     const snapshot = h('button', { type: 'button', class: 'btn btn-quiet', title: `Point-in-time copy from ${pinned.repository}` }, icon('box'), h('span', { class: 'label' }, 'Download snapshot ', h('span', { class: 'mono', text: pinned.shortSha })));
-    snapshot.addEventListener('click', () => saveArtifact(/** @type {string} */ (p.pinnedUrl), filename, snapshot, stateEl, label));
+    snapshot.addEventListener('click', () => saveArtifact(pinned.url, filename, snapshot, stateEl, label));
     actions.append(snapshot);
   }
   actions.append(fallbackLink(p.downloadUrl), stateEl);
@@ -943,10 +973,8 @@ function sheetActions(p) {
 /** @param {string} tag */
 function sheetTagButton(tag) {
   return h('button', { type: 'button', title: `Show all ${tag} plugins`, text: tag, onclick: () => {
-    state.list = { ...state.list, q: '', tags: [tag] };
     closeSheet();
-    applyList();
-    els.grid.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    updateList({ q: '', tags: [tag] });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } });
 }
@@ -957,7 +985,7 @@ function sheetBody(p) {
   body.append(sheetActions(p), folderHint());
 
   const desc = h('div', { class: 'd-desc' });
-  for (const para of p.description.split(/\n\s*\n/)) if (para.trim()) desc.append(h('p', { text: para.trim() }));
+  for (const para of p.description.split(PARAGRAPH_BREAK)) if (para.trim()) desc.append(h('p', { text: para.trim() }));
   body.append(desc);
 
   if (p.features.length) {
@@ -1033,10 +1061,9 @@ function notFoundSheet(id) {
 
 /** @param {string} id */
 function renderSheet(id) {
-  clear(els.sheet);
-  els.sheet.append(h('span', { class: 'handle', 'aria-hidden': 'true' }));
+  els.sheet.replaceChildren(h('span', { class: 'handle', 'aria-hidden': 'true' }));
   const entry = state.entries.find((e) => e.id === id);
-  const outcome = entry ? state.outcomes.get(id) : undefined;
+  const outcome = state.outcomes.get(id);
   if (!entry || !outcome) els.sheet.append(...notFoundSheet(id));
   else if (outcome.status === 'broken') els.sheet.append(...brokenSheet(entry, outcome));
   else els.sheet.append(sheetHeader(outcome.plugin), sheetBody(outcome.plugin));
@@ -1052,13 +1079,13 @@ function openSheet(id) {
   state.sheetShown = true;
   state.closing = false; // an open (e.g. Back landing on another plugin) supersedes a pending close
   els.sheet.scrollTop = 0;
-  /** @type {HTMLElement | null} */ (els.sheet.querySelector('.d-close'))?.focus();
+  focusIn(els.sheet, '.d-close');
 }
 
 /**
  * Teardown after the sheet has closed: unlock scrolling, reset the open/close
  * bookkeeping, and return focus. Idempotent, because it runs both from our own
- * close paths and from the dialog's close event (which not every embedder fires).
+ * close paths and from the dialog's close event, which some hosts never fire.
  */
 function finishClose() {
   if (!state.sheetShown) return;
@@ -1102,8 +1129,7 @@ els.sheet.addEventListener('cancel', (e) => {
 });
 els.sheet.addEventListener('click', (e) => {
   const target = /** @type {HTMLElement} */ (e.target);
-  if (target.closest('[data-close]')) closeSheet();
-  else if (target === els.sheet) closeSheet();
+  if (target === els.sheet || target.closest('[data-close]')) closeSheet();
 });
 els.sheet.addEventListener('close', finishClose);
 window.addEventListener('hashchange', openFromHash);
@@ -1120,7 +1146,7 @@ document.addEventListener('keydown', (e) => {
   const target = /** @type {HTMLElement | null} */ (e.target);
   const inField = !!target && (target.matches('input, textarea, select') || target.isContentEditable);
   if (e.key === 'Escape') {
-    // Route Escape ourselves: not every environment fires the dialog's native cancel.
+    // Route Escape ourselves: some hosts never fire the dialog's cancel event.
     if (els.keys.open) {
       e.preventDefault();
       els.keys.close();
@@ -1203,8 +1229,7 @@ els.sort.addEventListener('click', (e) => {
 });
 els.reset.addEventListener('click', (e) => {
   e.preventDefault();
-  state.list = { ...DEFAULT_LIST_STATE };
-  applyList();
+  updateList(DEFAULT_LIST_STATE);
 });
 els.fold.addEventListener('click', () => setCollapsed(true));
 els.rail.addEventListener('click', (e) => {
@@ -1216,10 +1241,10 @@ els.rail.addEventListener('click', (e) => {
       els.search.focus();
       break;
     case 'tags':
-      /** @type {HTMLElement | null} */ (els.taglist.querySelector('[tabindex="0"]'))?.focus();
+      focusIn(els.taglist, '[tabindex="0"]');
       break;
     case 'sort':
-      /** @type {HTMLElement | null} */ (els.sort.querySelector('[tabindex="0"]'))?.focus();
+      focusIn(els.sort, '[tabindex="0"]');
       break;
     default:
       els.fold.focus();
@@ -1241,6 +1266,11 @@ els.refresh.addEventListener('click', () => {
 
 /* ============ Boot ============ */
 
+// Static icons are drawn from the same table as the dynamic ones, so the page carries no SVG markup.
+for (const el of document.querySelectorAll('[data-icon]')) {
+  const names = /** @type {Array<keyof typeof ICONS>} */ ((el.getAttribute('data-icon') ?? '').split(' '));
+  el.prepend(...names.map((name) => icon(name, `icon-${name}`)));
+}
 els.repoLink.href = repoUrl(REPOSITORY);
 els.repoName.textContent = `${REPOSITORY.owner}/${REPOSITORY.repo}`;
 applyTheme(storage.get(local, 'theme') === 'light' ? 'light' : 'dark');

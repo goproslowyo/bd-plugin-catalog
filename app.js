@@ -59,10 +59,11 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 /**
  * Creates an element. Attribute values are set as strings; `text` sets
  * textContent; `class` sets className; `on*` adds listeners.
- * @param {string} tag
+ * @template {keyof HTMLElementTagNameMap} K
+ * @param {K} tag
  * @param {Record<string, unknown>} [attrs]
  * @param {...(Node | string | number | null | undefined | false | Array<Node | string | null | undefined | false>)} children
- * @returns {HTMLElement}
+ * @returns {HTMLElementTagNameMap[K]}
  */
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -921,7 +922,7 @@ function sheetActions(p) {
   const actions = h('div', { class: 'd-actions' });
   const stateEl = h('span', { class: 'state', 'aria-live': 'polite' });
   if (isAllowlisted(p.downloadUrl)) {
-    const download = /** @type {HTMLButtonElement} */ (h('button', { type: 'button', class: 'btn btn-primary' }, icon('down'), h('span', { class: 'label', text: 'Download' })));
+    const download = h('button', { type: 'button', class: 'btn btn-primary' }, icon('down'), h('span', { class: 'label', text: 'Download' }));
     download.addEventListener('click', () => saveArtifact(p.downloadUrl, filename, download, stateEl, 'Download'));
     actions.append(download);
   }
@@ -931,7 +932,7 @@ function sheetActions(p) {
   const pinned = pinnedCommit(p.pinnedUrl);
   if (pinned && p.pinnedUrl) {
     const label = `Download snapshot ${pinned.shortSha}`;
-    const snapshot = /** @type {HTMLButtonElement} */ (h('button', { type: 'button', class: 'btn btn-quiet', title: `Point-in-time copy from ${pinned.repository}` }, icon('box'), h('span', { class: 'label' }, 'Download snapshot ', h('span', { class: 'mono', text: pinned.shortSha }))));
+    const snapshot = h('button', { type: 'button', class: 'btn btn-quiet', title: `Point-in-time copy from ${pinned.repository}` }, icon('box'), h('span', { class: 'label' }, 'Download snapshot ', h('span', { class: 'mono', text: pinned.shortSha })));
     snapshot.addEventListener('click', () => saveArtifact(/** @type {string} */ (p.pinnedUrl), filename, snapshot, stateEl, label));
     actions.append(snapshot);
   }
@@ -1008,7 +1009,7 @@ function brokenSheet(entry, outcome) {
   const derived = derivedUrls(REPOSITORY, entry);
   const retry = h('button', { type: 'button', class: 'btn' }, icon('refresh'), 'Retry');
   retry.addEventListener('click', async () => {
-    /** @type {HTMLButtonElement} */ (retry).disabled = true;
+    retry.disabled = true;
     await retryEntries([entry.id]);
     renderSheet(entry.id);
   });

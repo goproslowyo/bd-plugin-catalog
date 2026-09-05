@@ -170,8 +170,10 @@ a.author:hover { color: var(--accent); }
 .card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .card-tags button {
   all: unset; cursor: pointer; font-size: var(--t-xs); color: var(--ink-2); background: var(--bg-2); border-radius: var(--r-1); padding: 2px 7px;
-  border: 1px solid transparent; transition: color .12s var(--ease), border-color .12s var(--ease); position: relative; z-index: 2;
+  border: 1px solid transparent; transition: color .12s var(--ease), border-color .12s var(--ease);
 }
+/* Only on a card: the buttons must sit above the name's full-surface link overlay. In the sheet they would sit above the sticky header instead. */
+.card .card-tags button { position: relative; z-index: 2; }
 .card-tags button:hover { color: var(--accent); border-color: var(--accent-line); }
 .card-tags button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .meta-line { display: flex; align-items: center; gap: var(--s-3); color: var(--ink-2); font-size: var(--t-xs); }

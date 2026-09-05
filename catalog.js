@@ -6,33 +6,6 @@
  * Nothing in here touches the DOM or the network.
  */
 
-const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-
-/**
- * Reads a parsed manifest.json into the ordered list of Plugin Entries the Site
- * should fetch. Entries that are disabled, missing a field, or whose id is not a
- * Slug are skipped silently. `order` is the entry's index in the manifest array,
- * which is the "Catalog" sort.
- * @param {unknown} manifest
- * @returns {{ ok: true, entries: Array<{ id: string, name: string, order: number }> } | { ok: false, reason: 'invalid' }}
- */
-export function readManifest(manifest) {
-  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return { ok: false, reason: 'invalid' };
-  const plugins = /** @type {{ plugins?: unknown }} */ (manifest).plugins;
-  if (!Array.isArray(plugins)) return { ok: false, reason: 'invalid' };
-  /** @type {PluginEntry[]} */
-  const entries = [];
-  plugins.forEach((raw, order) => {
-    if (!raw || typeof raw !== 'object') return;
-    const { id, name, enabled } = /** @type {Record<string, unknown>} */ (raw);
-    if (typeof id !== 'string' || !SLUG.test(id)) return;
-    if (typeof name !== 'string' || name === '') return;
-    if (enabled !== true) return;
-    entries.push({ id, name, order });
-  });
-  return { ok: true, entries };
-}
-
 /** @typedef {{ owner: string, repo: string, ref: string }} Repository */
 /** @typedef {{ id: string, name: string, order: number }} PluginEntry */
 
@@ -72,13 +45,41 @@ export function readManifest(manifest) {
  * @typedef {{ status: 'ok', plugin: Plugin } | { status: 'broken', reason: string, downloadUrl?: string, throttled?: boolean }} MetadataOutcome
  */
 
-const RAW_HOST = 'https://raw.githubusercontent.com';
-const ALLOWLISTED_HOSTS = ['raw.githubusercontent.com'];
+const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/**
+ * Reads a parsed manifest.json into the ordered list of Plugin Entries the Site
+ * should fetch, or null when the manifest has no plugins array. Entries that
+ * are disabled, missing a field, or whose id is not a Slug are skipped
+ * silently. `order` is the entry's index in the manifest array, which is the
+ * "Catalog" sort.
+ * @param {unknown} manifest
+ * @returns {PluginEntry[] | null}
+ */
+export function readManifest(manifest) {
+  if (!manifest || typeof manifest !== 'object') return null;
+  const plugins = /** @type {{ plugins?: unknown }} */ (manifest).plugins;
+  if (!Array.isArray(plugins)) return null;
+  /** @type {PluginEntry[]} */
+  const entries = [];
+  plugins.forEach((raw, order) => {
+    if (!raw || typeof raw !== 'object') return;
+    const { id, name, enabled } = /** @type {Record<string, unknown>} */ (raw);
+    if (typeof id !== 'string' || !SLUG.test(id)) return;
+    if (typeof name !== 'string' || name === '') return;
+    if (enabled !== true) return;
+    entries.push({ id, name, order });
+  });
+  return entries;
+}
+
+/** The one Allowlisted Host: the only place the Site fetches from. */
+const RAW_HOSTNAME = 'raw.githubusercontent.com';
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const COMMIT_SEGMENT = /\/[0-9a-f]{7,40}\//;
 
 /** @param {Repository} r */
-const rawBase = (r) => `${RAW_HOST}/${r.owner}/${r.repo}/${r.ref}`;
+const rawBase = (r) => `https://${RAW_HOSTNAME}/${r.owner}/${r.repo}/${r.ref}`;
 /** @param {Repository} r */
 export const repoUrl = (r) => `https://github.com/${r.owner}/${r.repo}`;
 /** @param {Repository} r */
@@ -97,11 +98,18 @@ const isHttps = (v) => typeof v === 'string' && /^https:\/\/[^\s/]+/.test(v);
 export function isAllowlisted(v) {
   if (!isHttps(v)) return false;
   try {
-    return ALLOWLISTED_HOSTS.includes(new URL(/** @type {string} */ (v)).hostname);
+    return new URL(/** @type {string} */ (v)).hostname === RAW_HOSTNAME;
   } catch {
     return false;
   }
 }
+
+/**
+ * Milliseconds at UTC midnight of a YYYY-MM-DD string. An impossible day such
+ * as 30 February rolls over into the next month rather than failing.
+ * @param {string} isoDate
+ */
+const utcMidnight = (isoDate) => Date.parse(`${isoDate}T00:00:00Z`);
 
 /** @param {unknown} v @returns {string | null} */
 function isoDateOrNull(v) {
@@ -109,7 +117,7 @@ function isoDateOrNull(v) {
   const m = ISO_DATE.exec(v);
   if (!m) return null;
   const [, y, mo, d] = m.map(Number);
-  const date = new Date(Date.UTC(y, mo - 1, d));
+  const date = new Date(utcMidnight(v));
   const real = date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
   return real ? v : null;
 }
@@ -117,8 +125,14 @@ function isoDateOrNull(v) {
 /** @param {unknown} v @returns {string[]} */
 const stringArray = (v) => (Array.isArray(v) && v.every((x) => typeof x === 'string') ? /** @type {string[]} */ (v) : []);
 
+/** Trimmed, non-empty strings from an array optional. @param {unknown} v */
+const cleanStrings = (v) => stringArray(v).map((s) => s.trim()).filter(Boolean);
+
 /** @param {unknown} v @returns {string | null} */
 const stringOrNull = (v) => (typeof v === 'string' ? v : null);
+
+/** @param {unknown} v @returns {string | null} */
+const httpsOrNull = (v) => (isHttps(v) ? /** @type {string} */ (v) : null);
 
 /**
  * Splits the comma-separated author string into author chips.
@@ -173,7 +187,7 @@ export function readPluginMetadata(body, entry, repository) {
     return { status: 'broken', reason: 'plugin.json is not a JSON object.' };
   }
   const meta = /** @type {Record<string, unknown>} */ (raw);
-  const statedDownload = isHttps(meta.downloadUrl) ? /** @type {string} */ (meta.downloadUrl) : null;
+  const statedDownload = httpsOrNull(meta.downloadUrl);
   /** @param {string} reason @returns {MetadataOutcome} */
   const broken = (reason) => (statedDownload ? { status: 'broken', reason, downloadUrl: statedDownload } : { status: 'broken', reason });
 
@@ -181,17 +195,17 @@ export function readPluginMetadata(body, entry, repository) {
     if (!(key in meta) || meta[key] === null) return broken(`Required field “${key}” is missing.`);
     if (typeof meta[key] !== 'string') return broken(`Required field “${key}” has the wrong type.`);
   }
+  const { name, description, version, author } = /** @type {{ name: string, description: string, version: string, author: string }} */ (meta);
 
-  const insideRepository = `${RAW_HOST}/${repository.owner}/${repository.repo}/`;
+  const insideRepository = `https://${RAW_HOSTNAME}/${repository.owner}/${repository.repo}/`;
   const kind = statedDownload === null || statedDownload.startsWith(insideRepository) ? 'hosted' : 'external';
 
-  const statedSource = isHttps(meta.sourceUrl) ? /** @type {string} */ (meta.sourceUrl) : null;
+  const statedSource = httpsOrNull(meta.sourceUrl);
   /** @type {string} */
   let downloadUrl;
   /** @type {string} */
   let sourceUrl;
-  /** @type {string | null} */
-  let changelogUrl = isHttps(meta.changelogUrl) ? /** @type {string} */ (meta.changelogUrl) : null;
+  let changelogUrl = httpsOrNull(meta.changelogUrl);
 
   if (kind === 'hosted') {
     const derived = derivedUrls(repository, entry);
@@ -215,26 +229,26 @@ export function readPluginMetadata(body, entry, repository) {
       entryName: entry.name,
       order: entry.order,
       kind,
-      name: /** @type {string} */ (meta.name),
-      description: /** @type {string} */ (meta.description),
-      version: /** @type {string} */ (meta.version),
-      authors: splitAuthors(/** @type {string} */ (meta.author)),
+      name,
+      description,
+      version,
+      authors: splitAuthors(author),
       status: stringOrNull(meta.status),
       workingStatus: stringOrNull(meta.workingStatus),
       lastUpdated: isoDateOrNull(meta.lastUpdated),
       releaseDate: isoDateOrNull(meta.releaseDate),
-      features: stringArray(meta.features),
+      features: cleanStrings(meta.features),
       sourceUrl,
       changelogUrl,
       downloadUrl,
-      requirements: stringArray(meta.requirements),
-      tags: stringArray(meta.tags).map((t) => t.trim()).filter(Boolean),
+      requirements: cleanStrings(meta.requirements),
+      tags: cleanStrings(meta.tags),
       icon: isAllowlisted(meta.icon) ? /** @type {string} */ (meta.icon) : null,
       license: stringOrNull(meta.license),
-      issuesUrl: isHttps(meta.issuesUrl) ? /** @type {string} */ (meta.issuesUrl) : `${repoUrl(repository)}/issues`,
+      issuesUrl: httpsOrNull(meta.issuesUrl) ?? `${repoUrl(repository)}/issues`,
       featured: meta.featured === true,
       pinnedUrl: pinned,
-      versionUrl: isHttps(meta.versionUrl) ? /** @type {string} */ (meta.versionUrl) : null,
+      versionUrl: httpsOrNull(meta.versionUrl),
       servedFrom: servedFromRepository(sourceUrl),
     },
   };
@@ -250,7 +264,7 @@ export const THROTTLED_COPY = 'GitHub is limiting downloads from your network. W
  */
 export function brokenFromFetch(failure) {
   if (failure.kind === 'http' && failure.status === 429) {
-    return { status: 'broken', reason: 'GitHub is limiting downloads from your network.', throttled: true };
+    return { status: 'broken', reason: THROTTLED_COPY, throttled: true };
   }
   const detail = failure.kind === 'http' ? String(failure.status) : 'network error';
   return { status: 'broken', reason: `plugin.json could not be fetched (${detail}).`, throttled: false };
@@ -258,10 +272,10 @@ export function brokenFromFetch(failure) {
 
 /* ---------- List State: search, tags, sort ---------- */
 
-/** @typedef {'catalog' | 'updated' | 'name'} SortKey */
+const SORT_KEYS = /** @type {const} */ (['catalog', 'updated', 'name']);
+/** @typedef {typeof SORT_KEYS[number]} SortKey */
 /** @typedef {{ q: string, tags: string[], sort: SortKey }} ListState */
 
-const SORT_KEYS = /** @type {const} */ (['catalog', 'updated', 'name']);
 /** @type {ListState} */
 export const DEFAULT_LIST_STATE = { q: '', tags: [], sort: 'catalog' };
 
@@ -312,7 +326,7 @@ export function parseListState(search) {
   return {
     q: params.get('q') ?? '',
     tags: params.getAll('tag').filter(Boolean),
-    sort: SORT_KEYS.includes(/** @type {SortKey} */ (sort)) ? /** @type {SortKey} */ (sort) : 'catalog',
+    sort: SORT_KEYS.includes(/** @type {SortKey} */ (sort)) ? /** @type {SortKey} */ (sort) : DEFAULT_LIST_STATE.sort,
   };
 }
 
@@ -324,7 +338,7 @@ export function formatListState(state) {
   const params = new URLSearchParams();
   if (state.q) params.set('q', state.q);
   for (const t of state.tags) params.append('tag', t);
-  if (state.sort !== 'catalog') params.set('sort', state.sort);
+  if (state.sort !== DEFAULT_LIST_STATE.sort) params.set('sort', state.sort);
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -356,7 +370,7 @@ export const deepLinkHash = (id) => `#plugin/${encodeURIComponent(id)}`;
  */
 export function artifactFilename(p) {
   if (/^[A-Za-z0-9._-]+$/.test(p.entryName)) return `${p.entryName}.plugin.js`;
-  const segment = p.downloadUrl.split('?')[0].split('#')[0].split('/').pop() ?? '';
+  const segment = p.downloadUrl.split('?')[0].split('#')[0].split('/').pop();
   if (/^[A-Za-z0-9._-]+\.plugin\.js$/.test(segment)) return segment;
   return `${p.id}.plugin.js`;
 }
@@ -405,8 +419,8 @@ export function versionLink(p) {
  * @returns {{ url: string, repository: string, sha: string, shortSha: string, commitUrl: string } | null}
  */
 export function pinnedCommit(pinnedUrl) {
-  if (!pinnedUrl) return null;
-  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+\/[^/]+)\/([0-9a-f]{7,40})\//.exec(pinnedUrl);
+  if (!pinnedUrl || !isAllowlisted(pinnedUrl)) return null;
+  const m = /^\/([^/]+\/[^/]+)\/([0-9a-f]{7,40})\//.exec(new URL(pinnedUrl).pathname);
   if (!m) return null;
   const [, repository, sha] = m;
   return { url: pinnedUrl, repository, sha, shortSha: sha.slice(0, 7), commitUrl: `https://github.com/${repository}/commit/${sha}` };
@@ -434,9 +448,9 @@ const RECENT_DAYS = 30;
  */
 export function daysSince(isoDate, today) {
   if (!isoDate) return null;
-  const then = Date.parse(`${isoDate}T00:00:00Z`);
+  const then = utcMidnight(isoDate);
   if (Number.isNaN(then)) return null;
-  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const todayUtc = utcMidnight(today.toISOString().slice(0, 10));
   return Math.round((todayUtc - then) / 864e5);
 }
 
@@ -465,7 +479,7 @@ export function hue(name) {
 
 /**
  * Initials for the icon tile: first letters of the first two words, where
- * camel-case boundaries, spaces and hyphens split words.
+ * camel-case boundaries, spaces, hyphens and underscores split words.
  * @param {string} name
  */
 export function initials(name) {
@@ -501,19 +515,21 @@ const SCHEMA_VERSION = 1;
 /** @param {Repository} r */
 export const cacheKey = (r) => `catalog:${r.owner}/${r.repo}@${r.ref}:v${SCHEMA_VERSION}`;
 
+/** Where BetterDiscord loads plugins from, per operating system. */
+const PLUGINS_FOLDERS = [
+  { key: 'windows', os: 'Windows', path: '%APPDATA%\\BetterDiscord\\plugins', note: null },
+  { key: 'mac', os: 'macOS', path: '~/Library/Application Support/BetterDiscord/plugins', note: null },
+  { key: 'linux', os: 'Linux', path: '$XDG_CONFIG_HOME/BetterDiscord/plugins', note: 'Defaults to ~/.config/BetterDiscord/plugins' },
+];
+
 /**
  * Plugins Folder Hint rows, the visitor's OS first and marked when the signal is clear.
  * @param {'windows' | 'mac' | 'linux' | null} platform
  * @returns {Array<{ os: string, path: string, note: string | null, you: boolean }>}
  */
 export function pluginsFolderRows(platform) {
-  const rows = [
-    { key: 'windows', os: 'Windows', path: '%APPDATA%\\BetterDiscord\\plugins', note: null },
-    { key: 'mac', os: 'macOS', path: '~/Library/Application Support/BetterDiscord/plugins', note: null },
-    { key: 'linux', os: 'Linux', path: '$XDG_CONFIG_HOME/BetterDiscord/plugins', note: 'Defaults to ~/.config/BetterDiscord/plugins' },
-  ];
-  const ordered = platform ? [...rows.filter((r) => r.key === platform), ...rows.filter((r) => r.key !== platform)] : rows;
-  return ordered.map(({ key, ...r }) => ({ ...r, you: key === platform }));
+  const rows = platform ? [...PLUGINS_FOLDERS.filter((r) => r.key === platform), ...PLUGINS_FOLDERS.filter((r) => r.key !== platform)] : PLUGINS_FOLDERS;
+  return rows.map(({ key, ...r }) => ({ ...r, you: key === platform }));
 }
 
 /**
@@ -523,7 +539,7 @@ export function pluginsFolderRows(platform) {
  */
 export function detectPlatform(nav) {
   const s = `${nav.userAgentData?.platform ?? ''} ${nav.platform ?? ''} ${nav.userAgent ?? ''}`.toLowerCase();
-  if (/win/.test(s)) return 'windows';
+  if (/\bwin/.test(s)) return 'windows';
   if (/mac/.test(s)) return 'mac';
   if (/linux|x11/.test(s) && !/android/.test(s)) return 'linux';
   return null;

@@ -23,6 +23,7 @@ import {
   catalogUpdatedDate,
   cacheKey,
   pluginsFolderRows,
+  THROTTLED_COPY,
 } from '../catalog.js';
 
 const REPO = { owner: 'goproslowyo', repo: 'bd-plugins', ref: 'main' };
@@ -203,24 +204,23 @@ test('readManifest keeps enabled slug entries in array order and skips the rest'
       { id: 'audio-toolbox', name: 'AudioToolbox', enabled: true },
     ],
   };
-  const result = readManifest(manifest);
-  assert.equal(result.ok, true);
-  assert.deepEqual(result.entries.map((e) => e.id), ['better-pin-dms', 'audio-toolbox']);
-  assert.deepEqual(result.entries[0], { id: 'better-pin-dms', name: 'BetterPinDMs', order: 0 });
-  assert.deepEqual(result.entries[1], { id: 'audio-toolbox', name: 'AudioToolbox', order: 6 });
+  const entries = readManifest(manifest);
+  assert.deepEqual(entries.map((e) => e.id), ['better-pin-dms', 'audio-toolbox']);
+  assert.deepEqual(entries[0], { id: 'better-pin-dms', name: 'BetterPinDMs', order: 0 });
+  assert.deepEqual(entries[1], { id: 'audio-toolbox', name: 'AudioToolbox', order: 6 });
 });
 
-test('readManifest reports an invalid manifest when plugins is not an array', () => {
-  assert.deepEqual(readManifest({ plugins: 'nope' }), { ok: false, reason: 'invalid' });
-  assert.deepEqual(readManifest(null), { ok: false, reason: 'invalid' });
-  assert.deepEqual(readManifest([]), { ok: false, reason: 'invalid' });
+test('readManifest is null for an invalid manifest: no plugins array', () => {
+  assert.equal(readManifest({ plugins: 'nope' }), null);
+  assert.equal(readManifest(null), null);
+  assert.equal(readManifest([]), null);
 });
 
 /* ---------- fetch outcomes ---------- */
 
 test('brokenFromFetch names the HTTP status, a network error, or throttling', () => {
   assert.deepEqual(brokenFromFetch({ kind: 'http', status: 404 }), { status: 'broken', reason: 'plugin.json could not be fetched (404).', throttled: false });
-  assert.deepEqual(brokenFromFetch({ kind: 'http', status: 429 }), { status: 'broken', reason: 'GitHub is limiting downloads from your network.', throttled: true });
+  assert.deepEqual(brokenFromFetch({ kind: 'http', status: 429 }), { status: 'broken', reason: THROTTLED_COPY, throttled: true });
   assert.deepEqual(brokenFromFetch({ kind: 'network' }), { status: 'broken', reason: 'plugin.json could not be fetched (network error).', throttled: false });
 });
 

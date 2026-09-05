@@ -423,13 +423,13 @@ async function loadCatalog({ reload = false } = {}) {
   } catch {
     manifestJson = null;
   }
-  const manifest = readManifest(manifestJson);
-  if (!manifest.ok) {
+  const entries = readManifest(manifestJson);
+  if (!entries) {
     state.loading = false;
     showFullState('invalid');
     return;
   }
-  state.entries = manifest.entries;
+  state.entries = entries;
   state.outcomes = new Map();
   await Promise.allSettled(state.entries.map((entry) => loadEntry(entry, init)));
   state.loaded = true;

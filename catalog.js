@@ -368,6 +368,197 @@ export function forkChangesUrl(p, range, anchor) {
 }
 
 /**
+ * The artifact at both ends of the Fork Changes range, on the raw host of the
+ * served-from repository: what the in-page diff fetches.
+ * @param {Pick<Plugin, 'servedFrom' | 'entryName'>} p
+ * @param {{ from: string, to: string }} range
+ * @returns {{ from: string, to: string } | null}
+ */
+export function forkChangesArtifactUrls(p, range) {
+  if (!p.servedFrom) return null;
+  const at = /** @param {string} sha */ (sha) => `https://${RAW_HOSTNAME}/${p.servedFrom}/${sha}/${artifactPath(p)}`;
+  return { from: at(range.from), to: at(range.to) };
+}
+
+/* ---------- line diff (Myers, "An O(ND) Difference Algorithm and Its Variations", 1986) ---------- */
+
+/** @typedef {{ type: 'eq' | 'add' | 'del', text: string }} DiffOp */
+
+/** Splits text into lines, treating one trailing newline as a terminator rather than an empty last line. @param {string} text */
+const toLines = (text) => text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n');
+
+/**
+ * Line-level diff of two texts as an edit script. Common prefix and suffix
+ * are peeled off first; the middle is solved with Myers' forward search.
+ * Returns null when the script would exceed `maxEditLength`, so a wildly
+ * diverged pair is abandoned quickly instead of rendered.
+ * @param {string} oldText
+ * @param {string} newText
+ * @param {{ maxEditLength?: number }} [opts]
+ * @returns {DiffOp[] | null}
+ */
+export function diffLines(oldText, newText, { maxEditLength = 2000 } = {}) {
+  const a = toLines(oldText);
+  const b = toLines(newText);
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
+  let endA = a.length;
+  let endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA -= 1;
+    endB -= 1;
+  }
+  const middle = myers(a.slice(start, endA), b.slice(start, endB), maxEditLength);
+  if (!middle) return null;
+  /** @type {DiffOp[]} */
+  const ops = [];
+  for (let i = 0; i < start; i += 1) ops.push({ type: 'eq', text: a[i] });
+  ops.push(...middle);
+  for (let i = endA; i < a.length; i += 1) ops.push({ type: 'eq', text: a[i] });
+  return ops;
+}
+
+/**
+ * Myers' greedy forward search over the edit graph, keeping every furthest-
+ * reaching frontier so the script can be traced back.
+ * @param {string[]} a
+ * @param {string[]} b
+ * @param {number} maxD
+ * @returns {DiffOp[] | null}
+ */
+function myers(a, b, maxD) {
+  const n = a.length;
+  const m = b.length;
+  const max = Math.min(maxD, n + m);
+  const offset = max + 1;
+  const width = 2 * max + 3;
+  /** @type {Int32Array[]} frontier per d, indexed by k + offset */
+  const trace = [];
+  let v = new Int32Array(width).fill(-1);
+  v[offset + 1] = 0;
+  for (let d = 0; d <= max; d += 1) {
+    const next = Int32Array.from(v);
+    for (let k = -d; k <= d; k += 2) {
+      const down = k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1]);
+      let x = down ? v[offset + k + 1] : v[offset + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x += 1;
+        y += 1;
+      }
+      next[offset + k] = x;
+      if (x >= n && y >= m) {
+        trace.push(next);
+        return backtrack(a, b, trace, offset);
+      }
+    }
+    trace.push(next);
+    v = next;
+  }
+  return null;
+}
+
+/**
+ * Walks the frontiers back from the end of the edit graph to the start.
+ * @param {string[]} a
+ * @param {string[]} b
+ * @param {Int32Array[]} trace
+ * @param {number} offset
+ */
+function backtrack(a, b, trace, offset) {
+  /** @type {DiffOp[]} */
+  const ops = [];
+  let x = a.length;
+  let y = b.length;
+  for (let d = trace.length - 1; d > 0; d -= 1) {
+    const v = trace[d - 1]; // the frontier the d-th move started from
+    const k = x - y;
+    const down = k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1]);
+    const prevK = down ? k + 1 : k - 1;
+    const prevX = v[offset + prevK];
+    const prevY = prevX - prevK;
+    while (x > prevX && y > prevY) {
+      x -= 1;
+      y -= 1;
+      ops.push({ type: 'eq', text: a[x] });
+    }
+    if (down) {
+      y -= 1;
+      ops.push({ type: 'add', text: b[y] });
+    } else {
+      x -= 1;
+      ops.push({ type: 'del', text: a[x] });
+    }
+  }
+  while (x > 0 && y > 0) {
+    x -= 1;
+    y -= 1;
+    ops.push({ type: 'eq', text: a[x] });
+  }
+  return ops.reverse();
+}
+
+/** How many lines an edit script adds and removes. @param {DiffOp[]} ops */
+export function diffStats(ops) {
+  let added = 0;
+  let removed = 0;
+  for (const op of ops) {
+    if (op.type === 'add') added += 1;
+    else if (op.type === 'del') removed += 1;
+  }
+  return { added, removed };
+}
+
+/** @typedef {{ type: DiffOp['type'], text: string, oldNo: number | null, newNo: number | null }} DiffLine */
+
+/**
+ * Groups an edit script into hunks: each run of changes with `context` equal
+ * lines either side, numbered on both sides. No changes, no hunks.
+ * @param {DiffOp[]} ops
+ * @param {number} [context]
+ * @returns {Array<{ lines: DiffLine[] }>}
+ */
+export function diffHunks(ops, context = 3) {
+  /** @type {DiffLine[]} */
+  const numbered = [];
+  let oldNo = 0;
+  let newNo = 0;
+  for (const op of ops) {
+    if (op.type !== 'add') oldNo += 1;
+    if (op.type !== 'del') newNo += 1;
+    numbered.push({ type: op.type, text: op.text, oldNo: op.type === 'add' ? null : oldNo, newNo: op.type === 'del' ? null : newNo });
+  }
+  /** @type {Array<{ lines: DiffLine[] }>} */
+  const hunks = [];
+  let i = 0;
+  while (i < numbered.length) {
+    if (numbered[i].type === 'eq') {
+      i += 1;
+      continue;
+    }
+    const start = Math.max(0, i - context);
+    let end = i;
+    while (end < numbered.length) {
+      if (numbered[end].type !== 'eq') {
+        end += 1;
+        continue;
+      }
+      // A gap of equal lines wider than twice the context splits hunks.
+      let gap = end;
+      while (gap < numbered.length && numbered[gap].type === 'eq') gap += 1;
+      if (gap === numbered.length || gap - end > 2 * context) {
+        end = Math.min(gap, end + context);
+        break;
+      }
+      end = gap;
+    }
+    hunks.push({ lines: numbered.slice(start, end) });
+    i = end;
+  }
+  return hunks;
+}
+
+/**
  * GitHub's undocumented per-file anchor in a compare view: the SHA-256 of the
  * repository-relative path in lowercase hex.
  * @param {Pick<Plugin, 'entryName'>} p

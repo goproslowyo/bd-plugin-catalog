@@ -32,6 +32,10 @@ import {
   forkChangesRange,
   forkChangesUrl,
   artifactDiffAnchor,
+  diffLines,
+  diffStats,
+  diffHunks,
+  forkChangesArtifactUrls,
 } from '../catalog.js';
 import { createHash } from 'node:crypto';
 
@@ -545,4 +549,81 @@ test('forkChangesUrl is the compare view in the served-from repository, anchored
 test('artifactDiffAnchor is the lowercase SHA-256 hex of the repository-relative artifact path', async () => {
   const path = 'Plugins/EnhancedChannelTabs/EnhancedChannelTabs.plugin.js';
   assert.equal(await artifactDiffAnchor({ entryName: 'EnhancedChannelTabs' }), createHash('sha256').update(path).digest('hex'));
+});
+
+/* ---------- in-page Fork Changes: line diff ---------- */
+
+test('diffLines: identical texts are all equal ops; an empty edit script has no adds or removes', () => {
+  const ops = diffLines('a\nb\nc\n', 'a\nb\nc\n');
+  assert.deepEqual(ops.map((o) => o.type), ['eq', 'eq', 'eq']);
+  assert.deepEqual(diffStats(ops), { added: 0, removed: 0 });
+});
+
+test('diffLines: inserts, deletes and replacements in the middle keep the common prefix and suffix as equal lines', () => {
+  const ops = diffLines('a\nb\nc\nd\n', 'a\nx\nc\nd\ne\n');
+  assert.deepEqual(ops, [
+    { type: 'eq', text: 'a' }, { type: 'del', text: 'b' }, { type: 'add', text: 'x' }, { type: 'eq', text: 'c' }, { type: 'eq', text: 'd' }, { type: 'add', text: 'e' },
+  ]);
+  assert.deepEqual(diffStats(ops), { added: 2, removed: 1 });
+});
+
+test('diffLines: reconstructing both sides from the edit script round-trips, with and without a trailing newline', () => {
+  const a = 'one\ntwo\nthree\nfour\nfive';
+  const b = 'zero\none\nthree\nfour\nfour and a half\nfive\n';
+  const ops = diffLines(a, b);
+  assert.equal(ops.filter((o) => o.type !== 'add').map((o) => o.text).join('\n'), a);
+  assert.equal(ops.filter((o) => o.type !== 'del').map((o) => o.text).join('\n'), b.replace(/\n$/, ''));
+});
+
+test('diffLines: a scattered edit over a long file round-trips and stays minimal', () => {
+  const a = Array.from({ length: 400 }, (_, i) => `line ${i}`);
+  const b = a.filter((_, i) => i % 37 !== 5).flatMap((l, i) => (i % 53 === 10 ? [l, `new ${i}`] : [l]));
+  const ops = diffLines(a.join('\n'), b.join('\n'));
+  assert.equal(ops.filter((o) => o.type !== 'add').map((o) => o.text).join('\n'), a.join('\n'));
+  assert.equal(ops.filter((o) => o.type !== 'del').map((o) => o.text).join('\n'), b.join('\n'));
+  assert.deepEqual(diffStats(ops), { added: b.filter((l) => l.startsWith('new')).length, removed: a.length - (b.length - b.filter((l) => l.startsWith('new')).length) });
+});
+
+test('diffLines: an edit script longer than maxEditLength is abandoned as null', () => {
+  const a = Array.from({ length: 50 }, (_, i) => `a${i}`).join('\n');
+  const b = Array.from({ length: 50 }, (_, i) => `b${i}`).join('\n');
+  assert.equal(diffLines(a, b, { maxEditLength: 20 }), null);
+  assert.equal(diffLines(a, b, { maxEditLength: 100 }).filter((o) => o.type !== 'eq').length, 100);
+});
+
+test('diffHunks groups changes with three lines of context and numbers both sides', () => {
+  const lines = Array.from({ length: 30 }, (_, i) => `l${i + 1}`);
+  const old = lines.join('\n');
+  const changed = [...lines];
+  changed[4] = 'L5';
+  changed.splice(20, 0, 'inserted');
+  const hunks = diffHunks(diffLines(old, changed.join('\n')));
+  assert.equal(hunks.length, 2);
+  assert.deepEqual(hunks[0].lines.map((l) => [l.type, l.oldNo, l.newNo, l.text]), [
+    ['eq', 2, 2, 'l2'], ['eq', 3, 3, 'l3'], ['eq', 4, 4, 'l4'], ['del', 5, null, 'l5'], ['add', null, 5, 'L5'], ['eq', 6, 6, 'l6'], ['eq', 7, 7, 'l7'], ['eq', 8, 8, 'l8'],
+  ]);
+  assert.deepEqual(hunks[1].lines.map((l) => [l.type, l.oldNo, l.newNo]), [
+    ['eq', 18, 18], ['eq', 19, 19], ['eq', 20, 20], ['add', null, 21], ['eq', 21, 22], ['eq', 22, 23], ['eq', 23, 24],
+  ]);
+  assert.deepEqual(diffHunks(diffLines('a\nb', 'a\nb')), []);
+});
+
+test('diffHunks merges changes closer than twice the context into one hunk', () => {
+  const lines = Array.from({ length: 20 }, (_, i) => `l${i + 1}`);
+  const changed = [...lines];
+  changed[4] = 'X';
+  changed[9] = 'Y';
+  const hunks = diffHunks(diffLines(lines.join('\n'), changed.join('\n')));
+  assert.equal(hunks.length, 1);
+  assert.equal(hunks[0].lines[0].oldNo, 2);
+  assert.equal(hunks[0].lines.at(-1).oldNo, 13);
+});
+
+test('forkChangesArtifactUrls names the artifact at both ends of the range on the raw host of the served-from repository', () => {
+  const hosted = { ...plugin(ECT_ENTRY), kind: 'hosted', servedFrom: 'goproslowyo/bd-plugins' };
+  assert.deepEqual(forkChangesArtifactUrls(hosted, { from: '75c20e7', to: '1e81a0f', empty: false }), {
+    from: 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/75c20e7/Plugins/EnhancedChannelTabs/EnhancedChannelTabs.plugin.js',
+    to: 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/1e81a0f/Plugins/EnhancedChannelTabs/EnhancedChannelTabs.plugin.js',
+  });
+  assert.equal(forkChangesArtifactUrls({ ...hosted, servedFrom: null }, { from: 'a', to: 'b', empty: false }), null);
 });

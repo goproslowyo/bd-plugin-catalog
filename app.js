@@ -46,6 +46,10 @@ import {
   forkChangesRange,
   forkChangesUrl,
   artifactDiffAnchor,
+  forkChangesArtifactUrls,
+  diffLines,
+  diffStats,
+  diffHunks,
 } from './catalog.js';
 
 /** @typedef {import('./catalog.js').Plugin} Plugin */
@@ -63,6 +67,8 @@ const SEARCH_DEBOUNCE_MS = 150;
 const COPY_FLASH_MS = 1200;
 const SKELETON_COUNT = 9;
 const DENSITY_MAX = 7;
+/** Fork Changes larger than this many changed lines are left to GitHub's compare view. */
+const DIFF_MAX_EDITS = 2000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 /** A blank line separates paragraphs in a description. */
 const PARAGRAPH_BREAK = /\n\s*\n/;
@@ -263,6 +269,8 @@ const state = {
   upstreamChecks: new Map(),
   /** @type {Map<string, Promise<UpstreamCheck>>} checks in flight, so one open never fetches twice */
   pendingChecks: new Map(),
+  /** @type {Map<string, Promise<ForkDiff>>} in-page Fork Changes by id, for the page session only */
+  forkDiffs: new Map(),
   /** when the Catalog was fetched; the cache TTL counts from here, not from later writes */
   savedAt: 0,
   /** bumped by every cache clear, so a check that was in flight across a Refresh is not kept */
@@ -1108,9 +1116,9 @@ function upstreamRow(p, u) {
 }
 
 /**
- * Line 2 of the Upstream row: the Fork Changes compare link, "no changes of
- * our own yet" for an empty range, or nothing when the served-from repository
- * is unknown and no compare can be built.
+ * Line 2 of the Upstream row: the Fork Changes compare link and the in-page
+ * viewer's toggle, "no changes of our own yet" for an empty range, or nothing
+ * when the served-from repository is unknown and no compare can be built.
  * @param {Plugin} p
  * @param {{ from: string, to: string, empty: boolean }} range
  */
@@ -1122,7 +1130,122 @@ function forkChangesLine(p, range) {
   artifactDiffAnchor(p).then((anchor) => {
     link.href = forkChangesUrl(p, range, anchor) ?? compare;
   }, () => { /* the compare still opens at its top */ });
-  return h('span', { class: 'upstream-line upstream-changes' }, link);
+  const toggle = h('button', { type: 'button', class: 'linklike', 'aria-expanded': 'false', text: 'Show changes here' });
+  toggle.addEventListener('click', () => toggleForkDiff(p, range, link, toggle));
+  return h('span', { class: 'upstream-line upstream-changes' }, link, ' · ', toggle);
+}
+
+/* ---------- in-page Fork Changes ---------- */
+
+/**
+ * The outcome of fetching and diffing both ends of the Fork Changes range.
+ * @typedef {{ status: 'ok', ops: import('./catalog.js').DiffOp[] } | { status: 'too-large' } | { status: 'failed', reason: string }} ForkDiff
+ */
+
+/**
+ * Fetches the artifact at the Fork Point and at the range end, both on the
+ * Allowlisted Host, and diffs them. Remembered for the page session so the
+ * two files are fetched once per plugin.
+ * @param {Plugin} p
+ * @param {{ from: string, to: string }} range
+ * @returns {Promise<ForkDiff>}
+ */
+function forkDiff(p, range) {
+  const cached = state.forkDiffs.get(p.id);
+  if (cached) return cached;
+  const run = (async () => {
+    const urls = forkChangesArtifactUrls(p, range);
+    if (!urls) return /** @type {ForkDiff} */ ({ status: 'failed', reason: 'The repository of this plugin is not known.' });
+    const [before, after] = await Promise.all([fetchText(urls.from), fetchText(urls.to)]);
+    for (const res of [before, after]) {
+      if (res.ok) continue;
+      const reason = isThrottled(res) ? THROTTLED_COPY : res.failure.kind === 'http' ? `The file could not be fetched (${res.failure.status}).` : 'The file could not be fetched (network error).';
+      return /** @type {ForkDiff} */ ({ status: 'failed', reason });
+    }
+    if (!before.ok || !after.ok) throw new Error('unreachable');
+    const ops = diffLines(before.text, after.text, { maxEditLength: DIFF_MAX_EDITS });
+    return ops ? /** @type {ForkDiff} */ ({ status: 'ok', ops }) : /** @type {ForkDiff} */ ({ status: 'too-large' });
+  })();
+  state.forkDiffs.set(p.id, run);
+  return run;
+}
+
+/**
+ * Shows or hides the in-page Fork Changes below the Details list. The section
+ * lands in the sheet's diff slot only if the sheet is still showing this plugin.
+ * @param {Plugin} p
+ * @param {{ from: string, to: string }} range
+ * @param {HTMLAnchorElement} compareLink
+ * @param {HTMLButtonElement} toggle
+ */
+async function toggleForkDiff(p, range, compareLink, toggle) {
+  const slot = /** @type {HTMLElement | null} */ (els.sheet.querySelector('.d-diff-slot'));
+  if (!slot) return;
+  if (toggle.getAttribute('aria-expanded') === 'true') {
+    slot.replaceChildren();
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.textContent = 'Show changes here';
+    return;
+  }
+  toggle.disabled = true;
+  toggle.textContent = 'Loading changes…';
+  const result = await forkDiff(p, range);
+  if (!slot.isConnected || !els.sheet.open) return;
+  toggle.disabled = false;
+  toggle.setAttribute('aria-expanded', 'true');
+  toggle.textContent = 'Hide changes';
+  slot.replaceChildren(forkDiffSection(range, result, compareLink.href));
+  slot.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+/**
+ * The "Changes since the fork" section: the range, the line counts, a link to
+ * the same compare on GitHub, and the hunks.
+ * @param {{ from: string, to: string }} range
+ * @param {ForkDiff} result
+ * @param {string} compareHref
+ */
+function forkDiffSection(range, result, compareHref) {
+  const shortSha = /** @param {string} s */ (s) => (/^[0-9a-f]{7,40}$/.test(s) ? s.slice(0, 7) : s);
+  const meta = h('p', { class: 'd-diff-meta' },
+    h('span', { class: 'mono' }, shortSha(range.from), ' → ', shortSha(range.to)));
+  const section = h('div', { class: 'd-sect d-diff', id: 'fork-diff' }, h('h3', { text: 'Changes since the fork' }), meta);
+  if (result.status === 'failed') {
+    meta.append(h('span', { text: '·' }), h('span', { text: result.reason }), h('span', { text: '·' }), extLink(compareHref, {}, 'Open the compare on GitHub ', icon('ext')));
+    return section;
+  }
+  if (result.status === 'too-large') {
+    meta.append(h('span', { text: '·' }), h('span', { text: `More than ${DIFF_MAX_EDITS} lines changed; that is more than fits here.` }), h('span', { text: '·' }), extLink(compareHref, {}, 'Open the compare on GitHub ', icon('ext')));
+    return section;
+  }
+  const stats = diffStats(result.ops);
+  const hunks = diffHunks(result.ops);
+  meta.append(
+    h('span', { text: '·' }),
+    h('span', { class: 'num diff-add', text: `+${stats.added}` }), ' ', h('span', { class: 'num diff-del', text: `−${stats.removed}` }), ' lines',
+    h('span', { text: '·' }),
+    extLink(compareHref, {}, 'Open on GitHub ', icon('ext')));
+  if (hunks.length === 0) {
+    section.append(h('p', { class: 'fine', text: 'The two copies are identical.' }));
+    return section;
+  }
+  const view = h('div', { class: 'diff', role: 'region', 'aria-label': 'Changes since the fork', tabindex: '0' });
+  for (const hunk of hunks) {
+    const first = hunk.lines[0];
+    const last = hunk.lines[hunk.lines.length - 1];
+    const block = h('div', { class: 'hunk' }, h('div', { class: 'hunk-head num', text: `Lines ${first.newNo ?? first.oldNo}–${last.newNo ?? last.oldNo}` }));
+    for (const line of hunk.lines) {
+      block.append(h('div', { class: `dl ${line.type}` },
+        h('span', { class: 'ln num', 'aria-hidden': 'true', text: line.oldNo ?? '' }),
+        h('span', { class: 'ln num', 'aria-hidden': 'true', text: line.newNo ?? '' }),
+        h('span', { class: 'mk', 'aria-hidden': 'true', text: line.type === 'add' ? '+' : line.type === 'del' ? '−' : ' ' }),
+        line.type === 'eq' ? null : h('span', { class: 'sr-only', text: line.type === 'add' ? 'Added: ' : 'Removed: ' }),
+        h('code', { text: line.text })));
+    }
+    view.append(block);
+  }
+  section.append(view);
+  return section;
 }
 
 /**
@@ -1207,6 +1330,7 @@ function sheetBody(p) {
     upstreamSlot = up.stateSlot;
   }
   body.append(h('div', { class: 'd-sect' }, h('h3', { text: 'Details' }), dl));
+  if (upstreamSlot) body.append(h('div', { class: 'd-diff-slot' }));
 
   if (p.kind === 'external') {
     const pinned = pinnedCommit(p.pinnedUrl);

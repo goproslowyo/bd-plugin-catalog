@@ -199,16 +199,14 @@ const storage = {
     }
   },
 };
-/** @param {'localStorage' | 'sessionStorage'} name */
-function storeNamed(name) {
+function storeNamed() {
   try {
-    return window[name];
+    return window.localStorage;
   } catch {
     return null;
   }
 }
-const local = storeNamed('localStorage');
-const session = storeNamed('sessionStorage');
+const local = storeNamed();
 
 /* ============ Elements ============ */
 
@@ -351,7 +349,7 @@ function isThrottled(outcome) {
 /* ============ Catalog cache ============ */
 
 function readCache() {
-  const raw = storage.get(session, cacheKey(REPOSITORY));
+  const raw = storage.get(local, cacheKey(REPOSITORY));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -365,14 +363,14 @@ function readCache() {
 
 function writeCache() {
   const entries = Object.fromEntries(state.outcomes);
-  storage.set(session, cacheKey(REPOSITORY), JSON.stringify({ savedAt: Date.now(), manifest: { entries: state.entries }, entries }));
+  storage.set(local, cacheKey(REPOSITORY), JSON.stringify({ savedAt: Date.now(), manifest: { entries: state.entries }, entries }));
 }
 
 function clearCache() {
   state.outcomes = new Map();
   state.entries = [];
   state.loaded = false;
-  storage.set(session, cacheKey(REPOSITORY), null);
+  storage.set(local, cacheKey(REPOSITORY), null);
 }
 
 /* ============ Loading the Catalog ============ */

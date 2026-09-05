@@ -355,9 +355,6 @@ export function forkChangesRange(p, repository) {
   return { from, to: pinned.sha, empty: from.slice(0, short) === pinned.sha.slice(0, short) };
 }
 
-/** The repository-relative path of a plugin's artifact. @param {Pick<Plugin, 'entryName'>} p */
-const artifactPath = (p) => `Plugins/${p.entryName}/${p.entryName}.plugin.js`;
-
 /**
  * The compare view of the Fork Changes in the served-from repository, anchored
  * on the artifact's diff when the anchor is known.
@@ -536,13 +533,16 @@ export function passesHeaderCheck(text) {
 
 /* ---------- links ---------- */
 
+/** The repository-relative path of a plugin's artifact. @param {Pick<Plugin, 'entryName'>} p */
+const artifactPath = (p) => `Plugins/${p.entryName}/${p.entryName}.plugin.js`;
+
 /**
  * The file history of a plugin in its served-from repository.
  * @param {Pick<Plugin, 'servedFrom' | 'entryName'>} p
  */
 export function historyUrl(p) {
   if (!p.servedFrom) return null;
-  return `https://github.com/${p.servedFrom}/commits/main/Plugins/${p.entryName}/${p.entryName}.plugin.js`;
+  return `https://github.com/${p.servedFrom}/commits/main/${artifactPath(p)}`;
 }
 
 /**
@@ -556,7 +556,7 @@ export function versionLink(p) {
   if (p.versionUrl) return { href: p.versionUrl, title: exact };
   const pinned = pinnedCommit(p.pinnedUrl);
   if (pinned) {
-    return { href: `https://github.com/${pinned.repository}/blob/${pinned.sha}/Plugins/${p.entryName}/${p.entryName}.plugin.js`, title: exact };
+    return { href: `https://github.com/${pinned.repository}/blob/${pinned.sha}/${artifactPath(p)}`, title: exact };
   }
   const history = historyUrl(p);
   return history ? { href: history, title: 'No per-version link for this plugin; opens its change history' } : null;

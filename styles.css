@@ -358,7 +358,6 @@ dialog.sheet[open]::backdrop { animation: fade-in .26s var(--ease); }
 .d-meta a:hover { color: var(--accent); text-decoration-color: var(--accent); }
 .d-meta ul { padding-left: 18px; }
 .d-meta .badge { margin-left: 6px; vertical-align: middle; }
-.d-meta .drift-slot:empty { display: none; }
 .upstream { display: flex; flex-direction: column; gap: 4px; }
 .upstream-state { color: var(--ink-1); }
 .upstream-changes { font-size: var(--t-xs); color: var(--ink-1); }

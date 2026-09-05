@@ -265,6 +265,8 @@ const state = {
   pendingChecks: new Map(),
   /** when the Catalog was fetched; the cache TTL counts from here, not from later writes */
   savedAt: 0,
+  /** bumped by every cache clear, so a check that was in flight across a Refresh is not kept */
+  cacheGeneration: 0,
   loaded: false,
   loading: false,
   /** @type {ListState} */
@@ -374,13 +376,9 @@ function readCache() {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed.savedAt !== 'number' || Date.now() - parsed.savedAt > CACHE_TTL_MS) return null;
     if (!Array.isArray(parsed.manifest?.entries) || typeof parsed.entries !== 'object') return null;
-    /** @type {Record<string, UpstreamCheck>} each check keeps its own ten-minute TTL */
-    const upstreamChecks = {};
-    for (const [id, check] of Object.entries(parsed.upstreamChecks ?? {})) {
-      if (check && typeof check.checkedAt === 'number' && Date.now() - check.checkedAt <= CACHE_TTL_MS) upstreamChecks[id] = check;
-    }
+    // Upstream Check outcomes share the Catalog's TTL: they expire with the entry that holds them.
     return /** @type {{ savedAt: number, entries: PluginEntry[], outcomes: Record<string, Outcome>, upstreamChecks: Record<string, UpstreamCheck> }} */ ({
-      savedAt: parsed.savedAt, entries: parsed.manifest.entries, outcomes: parsed.entries, upstreamChecks,
+      savedAt: parsed.savedAt, entries: parsed.manifest.entries, outcomes: parsed.entries, upstreamChecks: parsed.upstreamChecks ?? {},
     });
   } catch {
     return null;
@@ -396,6 +394,8 @@ function writeCache() {
 function clearCache() {
   state.outcomes = new Map();
   state.upstreamChecks = new Map();
+  state.pendingChecks = new Map();
+  state.cacheGeneration += 1;
   state.entries = [];
   state.loaded = false;
   storage.set(local, cacheKey(REPOSITORY), null);
@@ -1031,6 +1031,7 @@ function upstreamCheck(p, u) {
   const pending = state.pendingChecks.get(p.id);
   if (pending) return pending;
   const url = upstreamMetadataUrl(u);
+  const generation = state.cacheGeneration;
   const run = (async () => {
     /** @type {UpstreamCheck} */
     let check;
@@ -1041,39 +1042,48 @@ function upstreamCheck(p, u) {
       const read = res.ok ? readUpstreamVersion(res.text) : { failure: res.failure };
       check = 'version' in read ? { checkedAt: Date.now(), version: read.version } : { checkedAt: Date.now(), version: null, failure: read.failure };
     }
-    state.pendingChecks.delete(p.id);
-    state.upstreamChecks.set(p.id, check);
-    if (state.loaded) writeCache();
+    // A Refresh while the check was in flight has cleared the cache; that outcome belongs to the old Catalog.
+    if (generation === state.cacheGeneration) {
+      state.pendingChecks.delete(p.id);
+      state.upstreamChecks.set(p.id, check);
+      if (state.loaded) writeCache();
+    }
     return check;
   })();
   state.pendingChecks.set(p.id, run);
   return run;
 }
 
-/** The Drifted badge: warn colour, the two versions in its title and for screen readers. @param {Upstream} u @param {string} current */
-function driftedBadge(u, current) {
+/**
+ * The Drifted badge in warn colour. The header's copy carries the two versions
+ * in its title and as screen-reader text; the row's copy sits beside that
+ * text already, so it stays a plain label.
+ * @param {Upstream} u
+ * @param {string} current
+ * @param {boolean} describe
+ */
+function driftedBadge(u, current, describe) {
   const text = `Upstream now declares ${current}; our copy forked at ${u.version}`;
-  return h('span', { class: 'badge badge-drifted', title: text }, icon('warn'), h('span', { 'aria-hidden': 'true', text: 'Drifted' }), h('span', { class: 'sr-only', text: `Drifted. ${text}` }));
+  return h('span', { class: 'badge badge-drifted', title: describe ? text : undefined }, icon('warn'), 'Drifted', describe ? h('span', { class: 'sr-only', text }) : null);
 }
 
 /**
  * Fills the Upstream row's state slot and the header's badge slot from a check
- * outcome. Both slots are looked up on the sheet as it is now, so nothing lands
- * in a sheet that has since closed or moved on to another plugin.
- * @param {Plugin} p
+ * outcome. Nothing lands in a sheet that has since closed or moved on to
+ * another plugin: a closed dialog keeps its children, so both are checked.
  * @param {Upstream} u
  * @param {UpstreamCheck} check
  * @param {{ stateSlot: HTMLElement, driftSlot: HTMLElement }} slots
  */
-function renderUpstreamState(p, u, check, slots) {
-  if (!slots.stateSlot.isConnected || !slots.driftSlot.isConnected) return;
+function renderUpstreamState(u, check, slots) {
+  if (!els.sheet.open || !slots.stateSlot.isConnected || !slots.driftSlot.isConnected) return;
   const outcome = upstreamState(u, check);
   slots.driftSlot.replaceChildren();
   if (outcome.state === 'in-sync') {
     slots.stateSlot.replaceChildren('· up to date');
   } else if (outcome.state === 'drifted') {
-    slots.stateSlot.replaceChildren('· now ', extLink(u.url, { class: 'mono num', title: 'Upstream today' }, outcome.current), ' ', driftedBadge(u, outcome.current));
-    slots.driftSlot.append(driftedBadge(u, outcome.current));
+    slots.stateSlot.replaceChildren('· now ', extLink(u.url, { class: 'mono num', title: 'Upstream today' }, outcome.current), ' ', driftedBadge(u, outcome.current, false));
+    slots.driftSlot.append(driftedBadge(u, outcome.current, true));
   } else {
     slots.stateSlot.replaceChildren(outcome.throttled ? `· ${THROTTLED_COPY}` : '· couldn\'t check the current version');
   }
@@ -1094,18 +1104,25 @@ function upstreamRow(p, u) {
     ' ',
     stateSlot);
   const range = forkChangesRange(p, REPOSITORY);
-  /** @type {Node | string} */
-  let changes = 'no changes of our own yet';
-  const compare = range && !range.empty ? forkChangesUrl(p, range, null) : null;
-  if (range && compare) {
-    const link = extLink(compare, { title: 'Compare in the repository' }, 'Our changes since the fork', ' ', icon('ext'));
-    artifactDiffAnchor(p).then((anchor) => {
-      link.href = forkChangesUrl(p, range, anchor) ?? compare;
-    }, () => { /* the compare still opens at its top */ });
-    changes = link;
-  }
-  const line2 = h('span', { class: 'upstream-line upstream-changes' }, changes);
-  return { value: h('span', { class: 'upstream' }, line1, line2), stateSlot };
+  return { value: h('span', { class: 'upstream' }, line1, range ? forkChangesLine(p, range) : null), stateSlot };
+}
+
+/**
+ * Line 2 of the Upstream row: the Fork Changes compare link, "no changes of
+ * our own yet" for an empty range, or nothing when the served-from repository
+ * is unknown and no compare can be built.
+ * @param {Plugin} p
+ * @param {{ from: string, to: string, empty: boolean }} range
+ */
+function forkChangesLine(p, range) {
+  if (range.empty) return h('span', { class: 'upstream-line upstream-changes', text: 'no changes of our own yet' });
+  const compare = forkChangesUrl(p, range, null);
+  if (!compare) return null;
+  const link = extLink(compare, { title: 'Compare in the repository' }, 'Our changes since the fork', ' ', icon('ext'));
+  artifactDiffAnchor(p).then((anchor) => {
+    link.href = forkChangesUrl(p, range, anchor) ?? compare;
+  }, () => { /* the compare still opens at its top */ });
+  return h('span', { class: 'upstream-line upstream-changes' }, link);
 }
 
 /**
@@ -1119,7 +1136,7 @@ function startUpstreamCheck(p, stateSlot) {
   if (!u) return;
   const driftSlot = /** @type {HTMLElement | null} */ (els.sheet.querySelector('.drift-slot'));
   if (!driftSlot) return;
-  upstreamCheck(p, u).then((check) => renderUpstreamState(p, u, check, { stateSlot, driftSlot }));
+  upstreamCheck(p, u).then((check) => renderUpstreamState(u, check, { stateSlot, driftSlot }));
 }
 
 /** @param {Plugin} p */

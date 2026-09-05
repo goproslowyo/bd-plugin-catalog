@@ -39,9 +39,18 @@ import {
   NATURAL_DIR,
   DEFAULT_LIST_STATE,
   THROTTLED_COPY,
+  upstreamMetadataUrl,
+  upstreamVersionUrl,
+  readUpstreamVersion,
+  upstreamState,
+  forkChangesRange,
+  forkChangesUrl,
+  artifactDiffAnchor,
 } from './catalog.js';
 
 /** @typedef {import('./catalog.js').Plugin} Plugin */
+/** @typedef {import('./catalog.js').Upstream} Upstream */
+/** @typedef {import('./catalog.js').UpstreamCheck} UpstreamCheck */
 /** @typedef {import('./catalog.js').PluginEntry} PluginEntry */
 /** @typedef {import('./catalog.js').ListState} ListState */
 /** @typedef {import('./catalog.js').SortKey} SortKey */
@@ -250,6 +259,12 @@ const state = {
   entries: [],
   /** @type {Map<string, Outcome>} */
   outcomes: new Map(),
+  /** @type {Map<string, UpstreamCheck>} Upstream Check outcomes by id, successes and failures alike */
+  upstreamChecks: new Map(),
+  /** @type {Map<string, Promise<UpstreamCheck>>} checks in flight, so one open never fetches twice */
+  pendingChecks: new Map(),
+  /** when the Catalog was fetched; the cache TTL counts from here, not from later writes */
+  savedAt: 0,
   loaded: false,
   loading: false,
   /** @type {ListState} */
@@ -359,7 +374,14 @@ function readCache() {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed.savedAt !== 'number' || Date.now() - parsed.savedAt > CACHE_TTL_MS) return null;
     if (!Array.isArray(parsed.manifest?.entries) || typeof parsed.entries !== 'object') return null;
-    return /** @type {{ entries: PluginEntry[], outcomes: Record<string, Outcome> }} */ ({ entries: parsed.manifest.entries, outcomes: parsed.entries });
+    /** @type {Record<string, UpstreamCheck>} each check keeps its own ten-minute TTL */
+    const upstreamChecks = {};
+    for (const [id, check] of Object.entries(parsed.upstreamChecks ?? {})) {
+      if (check && typeof check.checkedAt === 'number' && Date.now() - check.checkedAt <= CACHE_TTL_MS) upstreamChecks[id] = check;
+    }
+    return /** @type {{ savedAt: number, entries: PluginEntry[], outcomes: Record<string, Outcome>, upstreamChecks: Record<string, UpstreamCheck> }} */ ({
+      savedAt: parsed.savedAt, entries: parsed.manifest.entries, outcomes: parsed.entries, upstreamChecks,
+    });
   } catch {
     return null;
   }
@@ -367,11 +389,13 @@ function readCache() {
 
 function writeCache() {
   const entries = Object.fromEntries(state.outcomes);
-  storage.set(local, cacheKey(REPOSITORY), JSON.stringify({ savedAt: Date.now(), manifest: { entries: state.entries }, entries }));
+  const upstreamChecks = Object.fromEntries(state.upstreamChecks);
+  storage.set(local, cacheKey(REPOSITORY), JSON.stringify({ savedAt: state.savedAt, manifest: { entries: state.entries }, entries, upstreamChecks }));
 }
 
 function clearCache() {
   state.outcomes = new Map();
+  state.upstreamChecks = new Map();
   state.entries = [];
   state.loaded = false;
   storage.set(local, cacheKey(REPOSITORY), null);
@@ -404,8 +428,10 @@ async function loadCatalog({ reload = false } = {}) {
   if (!reload) {
     const cached = readCache();
     if (cached) {
+      state.savedAt = cached.savedAt;
       state.entries = cached.entries;
       state.outcomes = new Map(Object.entries(cached.outcomes));
+      state.upstreamChecks = new Map(Object.entries(cached.upstreamChecks));
       state.loaded = true;
       state.loading = false;
       renderCatalog();
@@ -435,7 +461,9 @@ async function loadCatalog({ reload = false } = {}) {
   }
   state.entries = entries;
   state.outcomes = new Map();
+  state.upstreamChecks = new Map();
   await Promise.allSettled(state.entries.map((entry) => loadEntry(entry, init)));
+  state.savedAt = Date.now();
   state.loaded = true;
   state.loading = false;
   writeCache();
@@ -582,7 +610,7 @@ function brokenStandIn(entry) {
   return {
     id: entry.id, entryName: entry.name, kind: 'hosted', name: entry.name, description: '', version: '',
     authors: [], status: null, workingStatus: null, lastUpdated: null, releaseDate: null, features: [], sourceUrl: '', changelogUrl: null,
-    downloadUrl: '', requirements: [], tags: [], icon: null, license: null, issuesUrl: '', featured: false, pinnedUrl: null, versionUrl: null, servedFrom: null,
+    downloadUrl: '', requirements: [], tags: [], icon: null, license: null, issuesUrl: '', featured: false, pinnedUrl: null, versionUrl: null, servedFrom: null, upstream: null,
   };
 }
 
@@ -983,8 +1011,115 @@ function sheetHeader(p) {
     const url = authorProfileUrl(a);
     return url ? extLink(url, { class: 'author', title: 'GitHub profile' }, a) : h('span', { class: 'author', text: a });
   });
-  const sub = h('div', { class: 'sub' }, verNode, ...authors, updatedBadge(p), p.featured ? h('span', { class: 'badge badge-featured' }, icon('star'), 'Featured') : null);
+  const sub = h('div', { class: 'sub' }, verNode, ...authors, updatedBadge(p), p.featured ? h('span', { class: 'badge badge-featured' }, icon('star'), 'Featured') : null, h('span', { class: 'drift-slot' }));
   return h('div', { class: 'd-head' }, closeButton(), tile(p, true), h('div', { class: 't' }, h('h2', { id: 'sheet-title', text: p.name }), sub));
+}
+
+/* ---------- Upstream Check ---------- */
+
+/**
+ * Runs the Upstream Check for a Hosted plugin with an Upstream: one plain GET
+ * of the Upstream plugin.json, cached with the Catalog for the same TTL so a
+ * reopened sheet fetches nothing and a throttled Upstream is not re-hit.
+ * @param {Plugin} p
+ * @param {Upstream} u
+ * @returns {Promise<UpstreamCheck>}
+ */
+function upstreamCheck(p, u) {
+  const cached = state.upstreamChecks.get(p.id);
+  if (cached) return Promise.resolve(cached);
+  const pending = state.pendingChecks.get(p.id);
+  if (pending) return pending;
+  const url = upstreamMetadataUrl(u);
+  const run = (async () => {
+    /** @type {UpstreamCheck} */
+    let check;
+    if (!isAllowlisted(url)) {
+      check = { checkedAt: Date.now(), version: null, failure: { kind: 'invalid' } };
+    } else {
+      const res = await fetchText(url);
+      const read = res.ok ? readUpstreamVersion(res.text) : { failure: res.failure };
+      check = 'version' in read ? { checkedAt: Date.now(), version: read.version } : { checkedAt: Date.now(), version: null, failure: read.failure };
+    }
+    state.pendingChecks.delete(p.id);
+    state.upstreamChecks.set(p.id, check);
+    if (state.loaded) writeCache();
+    return check;
+  })();
+  state.pendingChecks.set(p.id, run);
+  return run;
+}
+
+/** The Drifted badge: warn colour, the two versions in its title and for screen readers. @param {Upstream} u @param {string} current */
+function driftedBadge(u, current) {
+  const text = `Upstream now declares ${current}; our copy forked at ${u.version}`;
+  return h('span', { class: 'badge badge-drifted', title: text }, icon('warn'), h('span', { 'aria-hidden': 'true', text: 'Drifted' }), h('span', { class: 'sr-only', text: `Drifted. ${text}` }));
+}
+
+/**
+ * Fills the Upstream row's state slot and the header's badge slot from a check
+ * outcome. Both slots are looked up on the sheet as it is now, so nothing lands
+ * in a sheet that has since closed or moved on to another plugin.
+ * @param {Plugin} p
+ * @param {Upstream} u
+ * @param {UpstreamCheck} check
+ * @param {{ stateSlot: HTMLElement, driftSlot: HTMLElement }} slots
+ */
+function renderUpstreamState(p, u, check, slots) {
+  if (!slots.stateSlot.isConnected || !slots.driftSlot.isConnected) return;
+  const outcome = upstreamState(u, check);
+  slots.driftSlot.replaceChildren();
+  if (outcome.state === 'in-sync') {
+    slots.stateSlot.replaceChildren('· up to date');
+  } else if (outcome.state === 'drifted') {
+    slots.stateSlot.replaceChildren('· now ', extLink(u.url, { class: 'mono num', title: 'Upstream today' }, outcome.current), ' ', driftedBadge(u, outcome.current));
+    slots.driftSlot.append(driftedBadge(u, outcome.current));
+  } else {
+    slots.stateSlot.replaceChildren(outcome.throttled ? `· ${THROTTLED_COPY}` : '· couldn\'t check the current version');
+  }
+}
+
+/**
+ * The Upstream row of the Details list: the Fork Point facts at once, the
+ * live state when the check resolves, and the Fork Changes link below.
+ * @param {Plugin} p
+ * @param {Upstream} u
+ */
+function upstreamRow(p, u) {
+  const stateSlot = h('span', { class: 'upstream-state', text: '· checking Upstream…' });
+  const line1 = h('span', { class: 'upstream-line' },
+    extLink(u.url, { class: 'mono', title: 'Upstream plugin folder' }, `${u.owner}/${u.repo}`),
+    ' · forked at ',
+    extLink(upstreamVersionUrl(u), { class: 'mono num', title: 'The Upstream file at the fork point' }, u.version),
+    ' ',
+    stateSlot);
+  const range = forkChangesRange(p, REPOSITORY);
+  /** @type {Node | string} */
+  let changes = 'no changes of our own yet';
+  const compare = range && !range.empty ? forkChangesUrl(p, range, null) : null;
+  if (range && compare) {
+    const link = extLink(compare, { title: 'Compare in the repository' }, 'Our changes since the fork', ' ', icon('ext'));
+    artifactDiffAnchor(p).then((anchor) => {
+      link.href = forkChangesUrl(p, range, anchor) ?? compare;
+    }, () => { /* the compare still opens at its top */ });
+    changes = link;
+  }
+  const line2 = h('span', { class: 'upstream-line upstream-changes' }, changes);
+  return { value: h('span', { class: 'upstream' }, line1, line2), stateSlot };
+}
+
+/**
+ * Starts (or reads back) the Upstream Check for the plugin whose sheet just
+ * rendered, and paints the outcome into that sheet's slots.
+ * @param {Plugin} p
+ * @param {HTMLElement} stateSlot
+ */
+function startUpstreamCheck(p, stateSlot) {
+  const u = p.upstream;
+  if (!u) return;
+  const driftSlot = /** @type {HTMLElement | null} */ (els.sheet.querySelector('.drift-slot'));
+  if (!driftSlot) return;
+  upstreamCheck(p, u).then((check) => renderUpstreamState(p, u, check, { stateSlot, driftSlot }));
 }
 
 /** @param {Plugin} p */
@@ -1047,6 +1182,13 @@ function sheetBody(p) {
   row('Requirements', p.requirements.length ? h('ul', {}, ...p.requirements.map((r) => h('li', { text: r }))) : null);
   const kindBadge = h('span', { class: 'badge badge-kind', text: p.kind === 'external' ? 'External' : 'Hosted' });
   row('Served from', p.servedFrom ? h('span', {}, extLink(`https://github.com/${p.servedFrom}`, { class: 'mono' }, p.servedFrom), kindBadge) : kindBadge);
+  /** @type {HTMLElement | null} */
+  let upstreamSlot = null;
+  if (p.kind === 'hosted' && p.upstream) {
+    const up = upstreamRow(p, p.upstream);
+    row('Upstream', up.value);
+    upstreamSlot = up.stateSlot;
+  }
   body.append(h('div', { class: 'd-sect' }, h('h3', { text: 'Details' }), dl));
 
   if (p.kind === 'external') {
@@ -1061,7 +1203,7 @@ function sheetBody(p) {
     p.changelogUrl ? extLink(p.changelogUrl, { class: 'btn' }, icon('ext'), 'Changelog') : null,
     extLink(p.issuesUrl, { class: 'btn' }, icon('warn'), 'Report an issue'),
     copyLinkButton(p.id))));
-  return body;
+  return { body, upstreamSlot };
 }
 
 /**
@@ -1105,7 +1247,11 @@ function renderSheet(id) {
   const outcome = state.outcomes.get(id);
   if (!entry || !outcome) els.sheet.append(...notFoundSheet(id));
   else if (outcome.status === 'broken') els.sheet.append(...brokenSheet(entry, outcome));
-  else els.sheet.append(sheetHeader(outcome.plugin), sheetBody(outcome.plugin));
+  else {
+    const { body, upstreamSlot } = sheetBody(outcome.plugin);
+    els.sheet.append(sheetHeader(outcome.plugin), body);
+    if (upstreamSlot) startUpstreamCheck(outcome.plugin, upstreamSlot);
+  }
 }
 
 /** @param {string} id */

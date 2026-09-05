@@ -24,7 +24,16 @@ import {
   cacheKey,
   pluginsFolderRows,
   detectPlatform,
+  readUpstream,
+  upstreamMetadataUrl,
+  upstreamVersionUrl,
+  readUpstreamVersion,
+  upstreamState,
+  forkChangesRange,
+  forkChangesUrl,
+  artifactDiffAnchor,
 } from '../catalog.js';
+import { createHash } from 'node:crypto';
 
 const REPO = { owner: 'goproslowyo', repo: 'bd-plugins', ref: 'main' };
 const ENTRY = { id: 'better-pin-dms', name: 'BetterPinDMs' };
@@ -213,7 +222,7 @@ const plugin = (over) => ({
   status: null, workingStatus: null, lastUpdated: over.lastUpdated ?? null, releaseDate: over.releaseDate ?? null,
   features: [], sourceUrl: 'https://github.com/o/r', changelogUrl: null, downloadUrl: 'https://raw.githubusercontent.com/o/r/main/x.plugin.js',
   requirements: [], tags: over.tags ?? [], icon: null, license: null, issuesUrl: 'https://github.com/o/r/issues',
-  featured: false, pinnedUrl: null, versionUrl: null, servedFrom: 'o/r',
+  featured: false, pinnedUrl: null, versionUrl: null, servedFrom: 'o/r', upstream: null,
 });
 const CATALOG = [
   plugin({ id: 'better-pin-dms', name: 'BetterPinDMs', description: 'Enhanced DM pinning.', tags: ['dms', 'organisation'], lastUpdated: '2026-08-27', releaseDate: '2025-11-24' }),
@@ -444,4 +453,96 @@ test('detectPlatform reads Windows, macOS and Linux from the navigator, and noth
     [{ userAgentData: { platform: 'macOS' }, platform: 'darwin' }, 'mac'],
   ];
   for (const [nav, expected] of cases) assert.equal(detectPlatform(nav), expected, JSON.stringify(nav));
+});
+
+/* ---------- Upstream, Upstream Check, Fork Changes ---------- */
+
+const ECT_ENTRY = { id: 'enhanced-channel-tabs', name: 'EnhancedChannelTabs' };
+const ECT_UPSTREAM = {
+  url: 'https://github.com/Pharaoh2k/BetterDiscordStuff/tree/main/Plugins/EnhancedChannelTabs',
+  version: '5.0.15',
+  commit: '79939c8',
+  forkPoint: '75c20e7',
+};
+const readHostedWithUpstream = (upstream) => readPluginMetadata(JSON.stringify({ name: 'x', description: 'd', version: '5.0.16', author: 'a', upstream }), ECT_ENTRY, REPO);
+
+test('readUpstream keeps a well-formed object and parses the Upstream folder out of its tree URL', () => {
+  assert.deepEqual(readUpstream(ECT_UPSTREAM), {
+    ...ECT_UPSTREAM, owner: 'Pharaoh2k', repo: 'BetterDiscordStuff', ref: 'main', name: 'EnhancedChannelTabs',
+  });
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, version: '  5.0.15 ' }).version, '5.0.15');
+});
+
+test('readUpstream is all-or-nothing: one malformed member drops the whole object', () => {
+  assert.equal(readUpstream(null), null);
+  assert.equal(readUpstream('https://github.com/o/r'), null);
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, url: 'https://github.com/Pharaoh2k/BetterDiscordStuff' }), null);
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, url: 'http://github.com/o/r/tree/main/Plugins/X' }), null);
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, url: 'https://gitlab.com/o/r/tree/main/Plugins/X' }), null);
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, version: '' }), null);
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, version: 5 }), null);
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, commit: 'abc' }), null);
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, commit: 'ABCDEF1' }), null);
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, forkPoint: undefined }), null);
+  assert.equal(readUpstream({ ...ECT_UPSTREAM, forkPoint: '75c20e7'.repeat(6) }), null);
+});
+
+test('readPluginMetadata: a Hosted entry keeps a valid upstream, drops a malformed one, and ignores it on an External entry', () => {
+  assert.deepEqual(readHostedWithUpstream(ECT_UPSTREAM).plugin.upstream, readUpstream(ECT_UPSTREAM));
+  assert.equal(readHostedWithUpstream({ ...ECT_UPSTREAM, commit: 'nope' }).plugin.upstream, null);
+  assert.equal(readMinimal().plugin.upstream, null);
+  const external = readPluginMetadata(JSON.stringify({ ...seedPinDms, upstream: ECT_UPSTREAM }), ENTRY, REPO);
+  assert.equal(external.plugin.kind, 'external');
+  assert.equal(external.plugin.upstream, null);
+});
+
+test('Upstream paths: the metadata URL is the only one fetched, the version link is the file at the recorded Upstream commit', () => {
+  const u = readUpstream(ECT_UPSTREAM);
+  assert.equal(upstreamMetadataUrl(u), 'https://raw.githubusercontent.com/Pharaoh2k/BetterDiscordStuff/main/Plugins/EnhancedChannelTabs/plugin.json');
+  assert.equal(upstreamVersionUrl(u), 'https://github.com/Pharaoh2k/BetterDiscordStuff/blob/79939c8/Plugins/EnhancedChannelTabs/EnhancedChannelTabs.plugin.js');
+  const renamed = readUpstream({ ...ECT_UPSTREAM, url: 'https://github.com/o/r/tree/dev/Plugins/OtherName' });
+  assert.equal(upstreamMetadataUrl(renamed), 'https://raw.githubusercontent.com/o/r/dev/Plugins/OtherName/plugin.json');
+  assert.equal(upstreamVersionUrl(renamed), 'https://github.com/o/r/blob/79939c8/Plugins/OtherName/OtherName.plugin.js');
+});
+
+test('readUpstreamVersion takes the trimmed version string and reports unparsable or versionless JSON as invalid', () => {
+  assert.deepEqual(readUpstreamVersion('{"version":" 5.0.15 "}'), { version: '5.0.15' });
+  assert.deepEqual(readUpstreamVersion('not json'), { failure: { kind: 'invalid' } });
+  assert.deepEqual(readUpstreamVersion('{"name":"x"}'), { failure: { kind: 'invalid' } });
+  assert.deepEqual(readUpstreamVersion('{"version":5}'), { failure: { kind: 'invalid' } });
+  assert.deepEqual(readUpstreamVersion('{"version":"  "}'), { failure: { kind: 'invalid' } });
+  assert.deepEqual(readUpstreamVersion('[]'), { failure: { kind: 'invalid' } });
+});
+
+test('upstreamState: In Sync on an equal version, Drifted on any difference, Unchecked on a failure (throttled for 429)', () => {
+  const u = readUpstream(ECT_UPSTREAM);
+  assert.deepEqual(upstreamState(u, { checkedAt: 1, version: '5.0.15' }), { state: 'in-sync' });
+  assert.deepEqual(upstreamState(u, { checkedAt: 1, version: '5.0.16' }), { state: 'drifted', current: '5.0.16' });
+  assert.deepEqual(upstreamState(u, { checkedAt: 1, version: '5.0.14' }), { state: 'drifted', current: '5.0.14' });
+  assert.deepEqual(upstreamState(u, { checkedAt: 1, version: null, failure: { kind: 'http', status: 404 } }), { state: 'unchecked', throttled: false });
+  assert.deepEqual(upstreamState(u, { checkedAt: 1, version: null, failure: { kind: 'network' } }), { state: 'unchecked', throttled: false });
+  assert.deepEqual(upstreamState(u, { checkedAt: 1, version: null, failure: { kind: 'invalid' } }), { state: 'unchecked', throttled: false });
+  assert.deepEqual(upstreamState(u, { checkedAt: 1, version: null, failure: { kind: 'http', status: 429 } }), { state: 'unchecked', throttled: true });
+});
+
+test('forkChangesRange runs from the Fork Point to the Pinned Copy sha, else to the configured ref; equal shas mean no changes', () => {
+  const hosted = { ...plugin(ECT_ENTRY), kind: 'hosted', servedFrom: 'goproslowyo/bd-plugins', upstream: readUpstream(ECT_UPSTREAM) };
+  const pinnedUrl = 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/1e81a0f/Plugins/EnhancedChannelTabs/EnhancedChannelTabs.plugin.js';
+  assert.deepEqual(forkChangesRange({ ...hosted, pinnedUrl }, REPO), { from: '75c20e7', to: '1e81a0f', empty: false });
+  assert.deepEqual(forkChangesRange(hosted, REPO), { from: '75c20e7', to: 'main', empty: false });
+  const seedPinned = pinnedUrl.replace('1e81a0f', '75c20e70fec5dff41bd739f0ef9f887f58f308e6');
+  assert.deepEqual(forkChangesRange({ ...hosted, pinnedUrl: seedPinned }, REPO), { from: '75c20e7', to: '75c20e70fec5dff41bd739f0ef9f887f58f308e6', empty: true });
+  assert.equal(forkChangesRange({ ...hosted, upstream: null }, REPO), null);
+});
+
+test('forkChangesUrl is the compare view in the served-from repository, anchored on the artifact', () => {
+  const hosted = { ...plugin(ECT_ENTRY), kind: 'hosted', servedFrom: 'goproslowyo/bd-plugins', upstream: readUpstream(ECT_UPSTREAM) };
+  assert.equal(forkChangesUrl(hosted, { from: '75c20e7', to: '1e81a0f', empty: false }, 'abc123'), 'https://github.com/goproslowyo/bd-plugins/compare/75c20e7...1e81a0f#diff-abc123');
+  assert.equal(forkChangesUrl(hosted, { from: '75c20e7', to: '1e81a0f', empty: false }, null), 'https://github.com/goproslowyo/bd-plugins/compare/75c20e7...1e81a0f');
+  assert.equal(forkChangesUrl({ ...hosted, servedFrom: null }, { from: '75c20e7', to: '1e81a0f', empty: false }, 'abc123'), null);
+});
+
+test('artifactDiffAnchor is the lowercase SHA-256 hex of the repository-relative artifact path', async () => {
+  const path = 'Plugins/EnhancedChannelTabs/EnhancedChannelTabs.plugin.js';
+  assert.equal(await artifactDiffAnchor({ entryName: 'EnhancedChannelTabs' }), createHash('sha256').update(path).digest('hex'));
 });

@@ -35,6 +35,21 @@
  * @property {string | null} pinnedUrl
  * @property {string | null} versionUrl
  * @property {string | null} servedFrom     owner/repo parsed from sourceUrl.
+ * @property {Upstream | null} upstream     Hosted entries only; the Fork Point facts.
+ */
+
+/**
+ * The Upstream a Hosted plugin was copied from, as recorded at its Fork Point,
+ * with the folder parsed out of the tree URL so paths can be derived from it.
+ * @typedef {object} Upstream
+ * @property {string} url        GitHub tree URL of the Upstream plugin folder; the human-facing link.
+ * @property {string} version    Upstream's declared version at the Fork Point; drift is measured against it.
+ * @property {string} commit     The Upstream commit at the Fork Point.
+ * @property {string} forkPoint  The Content Repository commit at which our artifact last matched Upstream.
+ * @property {string} owner
+ * @property {string} repo
+ * @property {string} ref
+ * @property {string} name       The folder name in the Upstream URL; need not equal our manifest name.
  */
 
 /**
@@ -248,8 +263,121 @@ export function readPluginMetadata(body, entry, repository) {
       pinnedUrl: pinned,
       versionUrl: httpsOrNull(meta.versionUrl),
       servedFrom: servedFromRepository(sourceUrl),
+      upstream: kind === 'hosted' ? readUpstream(meta.upstream) : null,
     },
   };
+}
+
+/* ---------- Upstream ---------- */
+
+const UPSTREAM_TREE_URL = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/Plugins\/([A-Za-z0-9._-]+)$/;
+const COMMIT_SHA = /^[0-9a-f]{7,40}$/;
+
+/**
+ * Reads the optional `upstream` object. All-or-nothing: one malformed member
+ * drops the whole object, and the plugin then has no Upstream.
+ * @param {unknown} v
+ * @returns {Upstream | null}
+ */
+export function readUpstream(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const { url, version, commit, forkPoint } = /** @type {Record<string, unknown>} */ (v);
+  const tree = typeof url === 'string' ? UPSTREAM_TREE_URL.exec(url) : null;
+  if (!tree) return null;
+  if (typeof version !== 'string' || version.trim() === '') return null;
+  if (typeof commit !== 'string' || !COMMIT_SHA.test(commit)) return null;
+  if (typeof forkPoint !== 'string' || !COMMIT_SHA.test(forkPoint)) return null;
+  const [, owner, repo, ref, name] = tree;
+  return { url: tree[0], version: version.trim(), commit, forkPoint, owner, repo, ref, name };
+}
+
+/** The Upstream plugin.json: the only Upstream URL the Site fetches. @param {Upstream} u */
+export const upstreamMetadataUrl = (u) => `https://${RAW_HOSTNAME}/${u.owner}/${u.repo}/${u.ref}/Plugins/${u.name}/plugin.json`;
+
+/** The Upstream artifact at the recorded Upstream commit: where "forked at <version>" points. @param {Upstream} u */
+export const upstreamVersionUrl = (u) => `https://github.com/${u.owner}/${u.repo}/blob/${u.commit}/Plugins/${u.name}/${u.name}.plugin.js`;
+
+/** @typedef {{ kind: 'http', status: number } | { kind: 'network' } | { kind: 'invalid' }} UpstreamFailure */
+/**
+ * One Upstream Check outcome, success or failure, as cached.
+ * @typedef {{ checkedAt: number, version: string | null, failure?: UpstreamFailure }} UpstreamCheck
+ */
+
+/**
+ * Reads Upstream's declared version out of its plugin.json body. Unparsable
+ * or versionless JSON is an `invalid` failure.
+ * @param {string} body
+ * @returns {{ version: string } | { failure: UpstreamFailure }}
+ */
+export function readUpstreamVersion(body) {
+  /** @type {unknown} */
+  let raw;
+  try {
+    raw = JSON.parse(body);
+  } catch {
+    return { failure: { kind: 'invalid' } };
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { failure: { kind: 'invalid' } };
+  const version = /** @type {{ version?: unknown }} */ (raw).version;
+  if (typeof version !== 'string' || version.trim() === '') return { failure: { kind: 'invalid' } };
+  return { version: version.trim() };
+}
+
+/**
+ * The Upstream Check's reading: Drifted on any difference from the Fork Point
+ * version as trimmed strings (no semver ordering), In Sync when equal,
+ * Unchecked on any failure.
+ * @param {Upstream} u
+ * @param {UpstreamCheck} check
+ * @returns {{ state: 'in-sync' } | { state: 'drifted', current: string } | { state: 'unchecked', throttled: boolean }}
+ */
+export function upstreamState(u, check) {
+  if (check.version === null) {
+    const throttled = check.failure?.kind === 'http' && check.failure.status === 429;
+    return { state: 'unchecked', throttled };
+  }
+  return check.version === u.version ? { state: 'in-sync' } : { state: 'drifted', current: check.version };
+}
+
+/**
+ * Fork Changes: from the Fork Point to the Pinned Copy's sha when there is one,
+ * else to the configured ref. Empty when the sha is the Fork Point itself.
+ * @param {Pick<Plugin, 'upstream' | 'pinnedUrl'>} p
+ * @param {Repository} repository
+ * @returns {{ from: string, to: string, empty: boolean } | null}
+ */
+export function forkChangesRange(p, repository) {
+  if (!p.upstream) return null;
+  const from = p.upstream.forkPoint;
+  const pinned = pinnedCommit(p.pinnedUrl);
+  if (!pinned) return { from, to: repository.ref, empty: false };
+  const short = Math.min(from.length, pinned.sha.length);
+  return { from, to: pinned.sha, empty: from.slice(0, short) === pinned.sha.slice(0, short) };
+}
+
+/** The repository-relative path of a plugin's artifact. @param {Pick<Plugin, 'entryName'>} p */
+const artifactPath = (p) => `Plugins/${p.entryName}/${p.entryName}.plugin.js`;
+
+/**
+ * The compare view of the Fork Changes in the served-from repository, anchored
+ * on the artifact's diff when the anchor is known.
+ * @param {Pick<Plugin, 'servedFrom'>} p
+ * @param {{ from: string, to: string }} range
+ * @param {string | null} anchor   lowercase SHA-256 hex of the artifact path
+ */
+export function forkChangesUrl(p, range, anchor) {
+  if (!p.servedFrom) return null;
+  return `https://github.com/${p.servedFrom}/compare/${range.from}...${range.to}${anchor ? `#diff-${anchor}` : ''}`;
+}
+
+/**
+ * GitHub's undocumented per-file anchor in a compare view: the SHA-256 of the
+ * repository-relative path in lowercase hex.
+ * @param {Pick<Plugin, 'entryName'>} p
+ */
+export async function artifactDiffAnchor(p) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(artifactPath(p)));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** Copy shown whenever the Content Repository's host answers 429 (Throttled). */
@@ -530,8 +658,8 @@ export function catalogUpdatedDate(plugins) {
   return newest;
 }
 
-/** Bump whenever the parsed Plugin shape changes, so stale sessionStorage is ignored. */
-const SCHEMA_VERSION = 2;
+/** Bump whenever the cached shape changes (parsed Plugins or Upstream Checks), so a stale cache is ignored. */
+const SCHEMA_VERSION = 3;
 
 /** @param {Repository} r */
 export const cacheKey = (r) => `catalog:${r.owner}/${r.repo}@${r.ref}:v${SCHEMA_VERSION}`;

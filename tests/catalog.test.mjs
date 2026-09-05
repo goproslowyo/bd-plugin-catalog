@@ -26,7 +26,7 @@ import {
 } from '../catalog.js';
 
 const REPO = { owner: 'goproslowyo', repo: 'bd-plugins', ref: 'main' };
-const ENTRY = { id: 'better-pin-dms', name: 'BetterPinDMs', order: 8 };
+const ENTRY = { id: 'better-pin-dms', name: 'BetterPinDMs' };
 
 /** Reads a plugin.json body with the four required fields plus `extra`, for ENTRY in REPO. */
 const readMinimal = (extra = {}) => readPluginMetadata(JSON.stringify({ name: 'x', description: 'd', version: '1', author: 'a', ...extra }), ENTRY, REPO);
@@ -72,7 +72,7 @@ test('readPluginMetadata: a seed plugin is an External entry with stated URLs ke
 
 test('readPluginMetadata: a Hosted entry with no URL fields derives them from the manifest name and ref', () => {
   const body = JSON.stringify({ name: 'Hosted Derived', description: 'd', version: '1.0.0', author: 'Fixture' });
-  const entry = { id: 'hosted-derived', name: 'HostedDerived', order: 0 };
+  const entry = { id: 'hosted-derived', name: 'HostedDerived' };
   const repo = { owner: 'goproslowyo', repo: 'bd-plugins', ref: 'test/broken' };
   const result = readPluginMetadata(body, entry, repo);
   assert.equal(result.status, 'ok');
@@ -130,7 +130,7 @@ test('readPluginMetadata: bad optional fields are dropped individually and the e
     sourceUrl: 'https://github.com/goproslowyo/bd-plugins/tree/test/broken/Plugins/BadOptionals',
     downloadUrl: 'https://raw.githubusercontent.com/goproslowyo/bd-plugins/test/broken/Plugins/BadOptionals/BadOptionals.plugin.js',
   });
-  const result = readPluginMetadata(body, { id: 'bad-optionals', name: 'BadOptionals', order: 0 }, REPO);
+  const result = readPluginMetadata(body, { id: 'bad-optionals', name: 'BadOptionals' }, REPO);
   assert.equal(result.status, 'ok');
   const p = result.plugin;
   assert.deepEqual(p.authors, ['Fixture', 'Second Author']);
@@ -183,10 +183,7 @@ test('readManifest keeps enabled slug entries in array order and skips the rest'
       { id: 'audio-toolbox', name: 'AudioToolbox', enabled: true },
     ],
   };
-  const entries = readManifest(manifest);
-  assert.deepEqual(entries.map((e) => e.id), ['better-pin-dms', 'audio-toolbox']);
-  assert.deepEqual(entries[0], { id: 'better-pin-dms', name: 'BetterPinDMs', order: 0 });
-  assert.deepEqual(entries[1], { id: 'audio-toolbox', name: 'AudioToolbox', order: 6 });
+  assert.deepEqual(readManifest(manifest), [{ id: 'better-pin-dms', name: 'BetterPinDMs' }, { id: 'audio-toolbox', name: 'AudioToolbox' }]);
 });
 
 test('readManifest is null for an invalid manifest: no plugins array', () => {
@@ -210,63 +207,63 @@ test('brokenFromFetch names the HTTP status, a network error, or throttling', ()
 /* ---------- filter and sort ---------- */
 
 const plugin = (over) => ({
-  id: over.id, entryName: over.name, order: over.order ?? 0, kind: 'external', name: over.name,
+  id: over.id, entryName: over.name, kind: 'external', name: over.name,
   description: over.description ?? '', version: '1.0.0', authors: over.authors ?? ['Pharaoh2k'],
-  status: null, workingStatus: null, lastUpdated: over.lastUpdated ?? null, releaseDate: null,
+  status: null, workingStatus: null, lastUpdated: over.lastUpdated ?? null, releaseDate: over.releaseDate ?? null,
   features: [], sourceUrl: 'https://github.com/o/r', changelogUrl: null, downloadUrl: 'https://raw.githubusercontent.com/o/r/main/x.plugin.js',
   requirements: [], tags: over.tags ?? [], icon: null, license: null, issuesUrl: 'https://github.com/o/r/issues',
   featured: false, pinnedUrl: null, versionUrl: null, servedFrom: 'o/r',
 });
 const CATALOG = [
-  plugin({ id: 'better-pin-dms', name: 'BetterPinDMs', order: 0, description: 'Enhanced DM pinning.', tags: ['dms', 'organisation'], lastUpdated: '2026-08-27' }),
-  plugin({ id: 'audio-toolbox', name: 'AudioToolbox', order: 1, description: 'Audio toolkit.', tags: ['audio', 'files'], lastUpdated: '2026-08-27' }),
-  plugin({ id: 'show-all-channels', name: 'ShowAllChannelsAuto', order: 2, description: 'Show all channels.', tags: ['channels'], lastUpdated: null }),
-  plugin({ id: 'better-file-viewer', name: 'BetterFileViewer', order: 3, description: 'View files.', tags: ['files'], authors: ['Pharaoh2k', 'AGreenPig'], lastUpdated: '2026-09-01' }),
+  plugin({ id: 'better-pin-dms', name: 'BetterPinDMs', description: 'Enhanced DM pinning.', tags: ['dms', 'organisation'], lastUpdated: '2026-08-27', releaseDate: '2025-11-24' }),
+  plugin({ id: 'audio-toolbox', name: 'AudioToolbox', description: 'Audio toolkit.', tags: ['audio', 'files'], lastUpdated: '2026-08-27', releaseDate: '2026-01-10' }),
+  plugin({ id: 'show-all-channels', name: 'ShowAllChannelsAuto', description: 'Show all channels.', tags: ['channels'], lastUpdated: null, releaseDate: null }),
+  plugin({ id: 'better-file-viewer', name: 'BetterFileViewer', description: 'View files.', tags: ['files'], authors: ['Pharaoh2k', 'AGreenPig'], lastUpdated: '2026-09-01', releaseDate: '2025-11-24' }),
 ];
+/** A List State with the default sort (Updated, newest first). @param {object} over */
+const listState = (over = {}) => ({ q: '', tags: [], sort: 'updated', dir: 'desc', ...over });
 
 test('applyListState: search is a case-insensitive substring over name, description, authors and tags', () => {
-  const ids = (state) => applyListState(CATALOG, state).map((p) => p.id);
-  assert.deepEqual(ids({ q: 'PIN', tags: [], sort: 'catalog' }), ['better-pin-dms']);
-  assert.deepEqual(ids({ q: 'greenpig', tags: [], sort: 'catalog' }), ['better-file-viewer']);
-  assert.deepEqual(ids({ q: 'organis', tags: [], sort: 'catalog' }), ['better-pin-dms']);
-  assert.deepEqual(ids({ q: 'toolkit', tags: [], sort: 'catalog' }), ['audio-toolbox']);
-  assert.equal(ids({ q: '  ', tags: [], sort: 'catalog' }).length, 4);
+  const ids = (over) => applyListState(CATALOG, listState(over)).map((p) => p.id);
+  assert.deepEqual(ids({ q: 'PIN' }), ['better-pin-dms']);
+  assert.deepEqual(ids({ q: 'greenpig' }), ['better-file-viewer']);
+  assert.deepEqual(ids({ q: 'organis' }), ['better-pin-dms']);
+  assert.deepEqual(ids({ q: 'toolkit' }), ['audio-toolbox']);
+  assert.equal(ids({ q: '  ' }).length, 4);
 });
 
 test('applyListState: selected tags are OR-ed', () => {
-  const ids = applyListState(CATALOG, { q: '', tags: ['dms', 'channels'], sort: 'catalog' }).map((p) => p.id);
+  const ids = applyListState(CATALOG, listState({ tags: ['dms', 'channels'] })).map((p) => p.id);
   assert.deepEqual(ids, ['better-pin-dms', 'show-all-channels']);
 });
 
-test('applyListState: Updated sorts by Recency descending, undated last, ties by manifest order', () => {
-  const ids = applyListState(CATALOG, { q: '', tags: [], sort: 'updated' }).map((p) => p.id);
-  assert.deepEqual(ids, ['better-file-viewer', 'better-pin-dms', 'audio-toolbox', 'show-all-channels']);
+test('applyListState: Updated sorts by Recency descending, undated last, ties by name', () => {
+  const ids = applyListState(CATALOG, listState({ sort: 'updated', dir: 'desc' })).map((p) => p.id);
+  assert.deepEqual(ids, ['better-file-viewer', 'audio-toolbox', 'better-pin-dms', 'show-all-channels']);
 });
 
-test('applyListState: A–Z sorts by name and catalog keeps manifest order', () => {
-  assert.deepEqual(applyListState(CATALOG, { q: '', tags: [], sort: 'name' }).map((p) => p.name), ['AudioToolbox', 'BetterFileViewer', 'BetterPinDMs', 'ShowAllChannelsAuto']);
-  const shuffled = [CATALOG[3], CATALOG[0], CATALOG[2], CATALOG[1]];
-  assert.deepEqual(applyListState(shuffled, { q: '', tags: [], sort: 'catalog' }).map((p) => p.order), [0, 1, 2, 3]);
+test('applyListState: Name sorts A–Z', () => {
+  assert.deepEqual(applyListState(CATALOG, listState({ sort: 'name', dir: 'asc' })).map((p) => p.name), ['AudioToolbox', 'BetterFileViewer', 'BetterPinDMs', 'ShowAllChannelsAuto']);
 });
 
 /* ---------- List State in the query string ---------- */
 
-test('parseListState reads q, repeated tag, and sort; unknown sort falls back to catalog', () => {
-  assert.deepEqual(parseListState('?q=pin&tag=dms&tag=files&sort=updated'), { q: 'pin', tags: ['dms', 'files'], sort: 'updated' });
-  assert.deepEqual(parseListState('?sort=bogus'), { q: '', tags: [], sort: 'catalog' });
-  assert.deepEqual(parseListState(''), { q: '', tags: [], sort: 'catalog' });
-  assert.deepEqual(parseListState('?sort=name&tag=&tag=a'), { q: '', tags: ['a'], sort: 'name' });
+test('parseListState reads q, repeated tag, and sort; unknown sort falls back to Updated', () => {
+  assert.deepEqual(parseListState('?q=pin&tag=dms&tag=files&sort=name'), { q: 'pin', tags: ['dms', 'files'], sort: 'name', dir: 'asc' });
+  assert.deepEqual(parseListState('?sort=bogus'), listState());
+  assert.deepEqual(parseListState(''), listState());
+  assert.deepEqual(parseListState('?sort=name&tag=&tag=a'), listState({ tags: ['a'], sort: 'name', dir: 'asc' }));
 });
 
 test('formatListState omits defaults so a plain visit has a clean address', () => {
-  assert.equal(formatListState({ q: '', tags: [], sort: 'catalog' }), '');
-  assert.equal(formatListState({ q: 'pin', tags: [], sort: 'catalog' }), '?q=pin');
-  assert.equal(formatListState({ q: '', tags: ['a', 'b'], sort: 'name' }), '?tag=a&tag=b&sort=name');
-  assert.equal(formatListState({ q: 'a b', tags: [], sort: 'updated' }), '?q=a+b&sort=updated');
+  assert.equal(formatListState(listState()), '');
+  assert.equal(formatListState(listState({ q: 'pin' })), '?q=pin');
+  assert.equal(formatListState(listState({ tags: ['a', 'b'], sort: 'name', dir: 'asc' })), '?tag=a&tag=b&sort=name');
+  assert.equal(formatListState(listState({ q: 'a b', sort: 'released', dir: 'desc' })), '?q=a+b&sort=released');
 });
 
 test('List State survives a round trip through the query string with spaces, & and + in the search text and a tag', () => {
-  const state = { q: 'a b & c+d', tags: ['x & y', 'p+q'], sort: 'name' };
+  const state = listState({ q: 'a b & c+d', tags: ['x & y', 'p+q'], sort: 'name', dir: 'asc' });
   assert.deepEqual(parseListState(formatListState(state)), state);
 });
 

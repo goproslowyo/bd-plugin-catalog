@@ -35,6 +35,8 @@ import {
   manifestUrl,
   metadataUrl,
   repoUrl,
+  nextSort,
+  NATURAL_DIR,
   DEFAULT_LIST_STATE,
   THROTTLED_COPY,
 } from './catalog.js';
@@ -98,6 +100,8 @@ const ICONS = {
   minus: [{ path: 'M5 12h14' }],
   plus: [{ path: 'M12 5v14M5 12h14' }],
   chevron: [{ path: 'm9 6 6 6-6 6' }],
+  arrowDown: [{ path: 'M12 5v14m0 0 5-5m-5 5-5-5' }],
+  arrowUp: [{ path: 'M12 19V5m0 0 5 5m-5-5-5 5' }],
   down: [{ path: 'M12 4v12m0 0 5-5m-5 5-5-5M4 20h16' }],
   ext: [{ path: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6' }],
   copy: [{ rect: [9, 9, 11, 11, 2] }, { path: 'M5 15V5a1 1 0 0 1 1-1h10' }],
@@ -576,7 +580,7 @@ function okPlugins() {
  */
 function brokenStandIn(entry) {
   return {
-    id: entry.id, entryName: entry.name, order: entry.order, kind: 'hosted', name: entry.name, description: '', version: '',
+    id: entry.id, entryName: entry.name, kind: 'hosted', name: entry.name, description: '', version: '',
     authors: [], status: null, workingStatus: null, lastUpdated: null, releaseDate: null, features: [], sourceUrl: '', changelogUrl: null,
     downloadUrl: '', requirements: [], tags: [], icon: null, license: null, issuesUrl: '', featured: false, pinnedUrl: null, versionUrl: null, servedFrom: null,
   };
@@ -605,7 +609,7 @@ function applyList() {
   els.countShown.textContent = String(visible.length);
   els.countTotal.textContent = String(models.length);
   els.search.value = state.list.q;
-  for (const b of els.sort.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.sort === state.list.sort));
+  renderSortSegments();
   for (const chip of /** @type {NodeListOf<HTMLElement>} */ (els.taglist.querySelectorAll('.chip'))) chip.setAttribute('aria-pressed', String(state.list.tags.includes(chip.dataset.tag ?? '')));
   els.clearTags.hidden = state.list.tags.length === 0;
   els.railTagCount.textContent = String(state.list.tags.length);
@@ -621,9 +625,43 @@ function syncUrl() {
   if (next !== `${location.pathname}${location.search}${location.hash}`) history.replaceState(history.state, '', next);
 }
 
-/** @param {Partial<ListState>} patch */
+/**
+ * How a sort direction reads, for the pressed segment's accessible name.
+ * @param {SortKey} key
+ * @param {ListState['dir']} dir
+ */
+function directionPhrase(key, dir) {
+  if (key === 'name') return dir === 'asc' ? 'A to Z' : 'Z to A';
+  return dir === 'desc' ? 'newest first' : 'oldest first';
+}
+
+/**
+ * Marks the current sort segment pressed, names its direction, and shows an
+ * arrow: down for the key's natural direction, up for the reverse.
+ */
+function renderSortSegments() {
+  const { sort, dir } = state.list;
+  for (const b of els.sort.querySelectorAll('button')) {
+    const key = /** @type {SortKey} */ (b.dataset.sort);
+    const pressed = key === sort;
+    b.setAttribute('aria-pressed', String(pressed));
+    b.querySelector('svg')?.remove();
+    if (!pressed) {
+      b.removeAttribute('aria-label');
+      continue;
+    }
+    b.setAttribute('aria-label', `${b.textContent?.trim()}, ${directionPhrase(key, dir)}`);
+    b.append(icon(dir === NATURAL_DIR[key] ? 'arrowDown' : 'arrowUp'));
+  }
+}
+
+/**
+ * @param {Partial<ListState>} patch   a new `sort` without a `dir` takes the key's natural direction
+ */
 function updateList(patch) {
-  state.list = { ...state.list, ...patch };
+  const next = { ...state.list, ...patch };
+  if (patch.sort !== undefined && patch.dir === undefined) next.dir = NATURAL_DIR[patch.sort];
+  state.list = next;
   applyList();
 }
 
@@ -1223,9 +1261,10 @@ els.clearTags.addEventListener('click', (e) => {
   e.preventDefault();
   updateList({ tags: [] });
 });
+// Enter and Space on a segment arrive here too, as the button's own click.
 els.sort.addEventListener('click', (e) => {
   const b = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('[data-sort]'));
-  if (b) updateList({ sort: /** @type {SortKey} */ (b.dataset.sort) });
+  if (b) updateList(nextSort(state.list, /** @type {SortKey} */ (b.dataset.sort)));
 });
 els.reset.addEventListener('click', (e) => {
   e.preventDefault();

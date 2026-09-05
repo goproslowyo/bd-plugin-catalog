@@ -226,9 +226,10 @@ a.author:hover { color: var(--accent); }
 .taglist .chip[aria-pressed="true"]::before { opacity: 1; transform: none; }
 .taglist .empty { color: var(--ink-2); font-size: var(--t-sm); padding: 4px 0; }
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-2); padding: 3px; gap: 3px; }
-.seg button { border: 0; background: transparent; color: var(--ink-1); font-size: var(--t-xs); font-weight: 600; padding: 6px 4px; border-radius: 7px; transition: background .15s var(--ease), color .15s var(--ease); }
+.seg button { display: inline-flex; align-items: center; justify-content: center; gap: 2px; border: 0; background: transparent; color: var(--ink-1); font-size: var(--t-xs); font-weight: 600; padding: 6px 4px; border-radius: 7px; transition: background .15s var(--ease), color .15s var(--ease); }
 .seg button:hover { color: var(--ink-0); }
 .seg button[aria-pressed="true"] { background: var(--bg-1); color: var(--ink-0); box-shadow: var(--shadow-1); }
+.seg button svg.i { width: 12px; height: 12px; stroke-width: 2.25; color: var(--accent); }
 .side-foot a { color: inherit; }
 .side-foot a:hover { color: var(--ink-0); }
 .side-foot .row { display: flex; gap: 4px; align-items: center; margin-top: 4px; flex-wrap: wrap; }

@@ -7,13 +7,12 @@
  */
 
 /** @typedef {{ owner: string, repo: string, ref: string }} Repository */
-/** @typedef {{ id: string, name: string, order: number }} PluginEntry */
+/** @typedef {{ id: string, name: string }} PluginEntry */
 
 /**
  * @typedef {object} Plugin
  * @property {string} id            Slug from the manifest; the Deep Link key.
  * @property {string} entryName     Manifest name: folder and artifact filename stem.
- * @property {number} order         Manifest position (the Catalog sort).
  * @property {'hosted' | 'external'} kind
  * @property {string} name
  * @property {string} description
@@ -48,11 +47,10 @@
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /**
- * Reads a parsed manifest.json into the ordered list of Plugin Entries the Site
- * should fetch, or null when the manifest has no plugins array. Entries that
- * are disabled, missing a field, or whose id is not a Slug are skipped
- * silently. `order` is the entry's index in the manifest array, which is the
- * "Catalog" sort.
+ * Reads a parsed manifest.json into the list of Plugin Entries the Site
+ * should fetch, in manifest order, or null when the manifest has no plugins
+ * array. Entries that are disabled, missing a field, or whose id is not a
+ * Slug are skipped silently.
  * @param {unknown} manifest
  * @returns {PluginEntry[] | null}
  */
@@ -62,14 +60,14 @@ export function readManifest(manifest) {
   if (!Array.isArray(plugins)) return null;
   /** @type {PluginEntry[]} */
   const entries = [];
-  plugins.forEach((raw, order) => {
-    if (!raw || typeof raw !== 'object') return;
+  for (const raw of plugins) {
+    if (!raw || typeof raw !== 'object') continue;
     const { id, name, enabled } = /** @type {Record<string, unknown>} */ (raw);
-    if (typeof id !== 'string' || !SLUG.test(id)) return;
-    if (typeof name !== 'string' || name === '') return;
-    if (enabled !== true) return;
-    entries.push({ id, name, order });
-  });
+    if (typeof id !== 'string' || !SLUG.test(id)) continue;
+    if (typeof name !== 'string' || name === '') continue;
+    if (enabled !== true) continue;
+    entries.push({ id, name });
+  }
   return entries;
 }
 
@@ -228,7 +226,6 @@ export function readPluginMetadata(body, entry, repository) {
     plugin: {
       id: entry.id,
       entryName: entry.name,
-      order: entry.order,
       kind,
       name,
       description,
@@ -273,20 +270,43 @@ export function brokenFromFetch(failure) {
 
 /* ---------- List State: search, tags, sort ---------- */
 
-const SORT_KEYS = /** @type {const} */ (['catalog', 'updated', 'name']);
+export const SORT_KEYS = /** @type {const} */ (['updated', 'released', 'name']);
 /** @typedef {typeof SORT_KEYS[number]} SortKey */
-/** @typedef {{ q: string, tags: string[], sort: SortKey }} ListState */
+/** @typedef {'asc' | 'desc'} SortDir */
+/** @typedef {{ q: string, tags: string[], sort: SortKey, dir: SortDir }} ListState */
+
+/** The direction a sort key takes when first chosen: dates newest first, names A–Z. */
+export const NATURAL_DIR = /** @type {Readonly<Record<SortKey, SortDir>>} */ ({ updated: 'desc', released: 'desc', name: 'asc' });
 
 /** @type {ListState} */
-export const DEFAULT_LIST_STATE = { q: '', tags: [], sort: 'catalog' };
+export const DEFAULT_LIST_STATE = { q: '', tags: [], sort: 'updated', dir: NATURAL_DIR.updated };
+
+/** Which Plugin field each date sort reads. */
+const DATE_FIELD = /** @type {const} */ ({ updated: 'lastUpdated', released: 'releaseDate' });
 
 /** @param {Plugin} p */
 const searchText = (p) => [p.name, p.description, ...p.authors, ...p.tags].join('\n').toLowerCase();
 
+/** @type {(a: Plugin, b: Plugin) => number} */
+const byName = (a, b) => a.name.localeCompare(b.name);
+
+/**
+ * The sort a segment produces when activated: choosing the current key
+ * reverses its direction, choosing another key takes that key's natural one.
+ * @param {Pick<ListState, 'sort' | 'dir'>} current
+ * @param {SortKey} key
+ * @returns {{ sort: SortKey, dir: SortDir }}
+ */
+export function nextSort(current, key) {
+  if (key !== current.sort) return { sort: key, dir: NATURAL_DIR[key] };
+  return { sort: key, dir: current.dir === 'asc' ? 'desc' : 'asc' };
+}
+
 /**
  * Filters and sorts the Catalog for the given List State. Search is a
  * case-insensitive substring over name, description, authors and tags; tags
- * are OR-ed; sorts are manifest order, Recency (undated last), or name.
+ * are OR-ed. The date sorts put entries without a date last in either
+ * direction; every tie breaks by name A–Z.
  * @param {Plugin[]} plugins
  * @param {ListState} state
  * @returns {Plugin[]}
@@ -299,40 +319,39 @@ export function applyListState(plugins, state) {
     if (tags.size && !p.tags.some((t) => tags.has(t))) return false;
     return true;
   });
-  /** @type {(a: Plugin, b: Plugin) => number} */
-  const byOrder = (a, b) => a.order - b.order;
-  switch (state.sort) {
-    case 'updated':
-      return kept.sort((a, b) => {
-        if (a.lastUpdated === b.lastUpdated) return byOrder(a, b);
-        if (a.lastUpdated === null) return 1;
-        if (b.lastUpdated === null) return -1;
-        return b.lastUpdated.localeCompare(a.lastUpdated);
-      });
-    case 'name':
-      return kept.sort((a, b) => a.name.localeCompare(b.name) || byOrder(a, b));
-    default:
-      return kept.sort(byOrder);
-  }
+  const sign = state.dir === 'asc' ? 1 : -1;
+  if (state.sort === 'name') return kept.sort((a, b) => sign * byName(a, b));
+  const field = DATE_FIELD[state.sort];
+  return kept.sort((a, b) => {
+    const da = a[field];
+    const db = b[field];
+    if (da === null || db === null) {
+      if (da === db) return byName(a, b);
+      return da === null ? 1 : -1;
+    }
+    return sign * da.localeCompare(db) || byName(a, b);
+  });
 }
 
 /**
- * Reads the List State from a query string (`?q=…&tag=a&tag=b&sort=…`).
+ * Reads the List State from a query string (`?q=…&tag=a&tag=b&sort=…&dir=…`).
+ * An unknown sort falls back to the default; an unknown or absent dir to the
+ * key's natural direction.
  * @param {string} search
  * @returns {ListState}
  */
 export function parseListState(search) {
   const params = new URLSearchParams(search);
-  const sort = params.get('sort');
-  return {
-    q: params.get('q') ?? '',
-    tags: params.getAll('tag').filter(Boolean),
-    sort: SORT_KEYS.includes(/** @type {SortKey} */ (sort)) ? /** @type {SortKey} */ (sort) : DEFAULT_LIST_STATE.sort,
-  };
+  const sortParam = params.get('sort');
+  const sort = SORT_KEYS.includes(/** @type {SortKey} */ (sortParam)) ? /** @type {SortKey} */ (sortParam) : DEFAULT_LIST_STATE.sort;
+  const dirParam = params.get('dir');
+  const dir = dirParam === 'asc' || dirParam === 'desc' ? dirParam : NATURAL_DIR[sort];
+  return { q: params.get('q') ?? '', tags: params.getAll('tag').filter(Boolean), sort, dir };
 }
 
 /**
- * Writes the List State as a query string, omitting defaults ('' for a plain visit).
+ * Writes the List State as a query string, omitting defaults ('' for a plain
+ * visit): the default sort, and a direction that is the key's natural one.
  * @param {ListState} state
  */
 export function formatListState(state) {
@@ -340,6 +359,7 @@ export function formatListState(state) {
   if (state.q) params.set('q', state.q);
   for (const t of state.tags) params.append('tag', t);
   if (state.sort !== DEFAULT_LIST_STATE.sort) params.set('sort', state.sort);
+  if (state.dir !== NATURAL_DIR[state.sort]) params.set('dir', state.dir);
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -511,7 +531,7 @@ export function catalogUpdatedDate(plugins) {
 }
 
 /** Bump whenever the parsed Plugin shape changes, so stale sessionStorage is ignored. */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 /** @param {Repository} r */
 export const cacheKey = (r) => `catalog:${r.owner}/${r.repo}@${r.ref}:v${SCHEMA_VERSION}`;

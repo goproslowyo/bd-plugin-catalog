@@ -5,6 +5,7 @@ import {
   readPluginMetadata,
   brokenFromFetch,
   applyListState,
+  nextSort,
   parseListState,
   formatListState,
   parseDeepLink,
@@ -242,11 +243,62 @@ test('applyListState: Updated sorts by Recency descending, undated last, ties by
   assert.deepEqual(ids, ['better-file-viewer', 'audio-toolbox', 'better-pin-dms', 'show-all-channels']);
 });
 
-test('applyListState: Name sorts A–Z', () => {
-  assert.deepEqual(applyListState(CATALOG, listState({ sort: 'name', dir: 'asc' })).map((p) => p.name), ['AudioToolbox', 'BetterFileViewer', 'BetterPinDMs', 'ShowAllChannelsAuto']);
+test('applyListState: Updated ascending is oldest first with undated entries still last', () => {
+  const ids = applyListState(CATALOG, listState({ sort: 'updated', dir: 'asc' })).map((p) => p.id);
+  assert.deepEqual(ids, ['audio-toolbox', 'better-pin-dms', 'better-file-viewer', 'show-all-channels']);
+});
+
+test('applyListState: Released sorts by releaseDate in both directions, undated last, ties by name', () => {
+  const ids = (dir) => applyListState(CATALOG, listState({ sort: 'released', dir })).map((p) => p.id);
+  assert.deepEqual(ids('desc'), ['audio-toolbox', 'better-file-viewer', 'better-pin-dms', 'show-all-channels']);
+  assert.deepEqual(ids('asc'), ['better-file-viewer', 'better-pin-dms', 'audio-toolbox', 'show-all-channels']);
+});
+
+test('applyListState: Name sorts A–Z and Z–A', () => {
+  const names = (dir) => applyListState(CATALOG, listState({ sort: 'name', dir })).map((p) => p.name);
+  assert.deepEqual(names('asc'), ['AudioToolbox', 'BetterFileViewer', 'BetterPinDMs', 'ShowAllChannelsAuto']);
+  assert.deepEqual(names('desc'), ['ShowAllChannelsAuto', 'BetterPinDMs', 'BetterFileViewer', 'AudioToolbox']);
+});
+
+test('applyListState: two undated entries keep name order under a date sort', () => {
+  const undated = [plugin({ id: 'z', name: 'Zeta' }), plugin({ id: 'a', name: 'Alpha' })];
+  for (const dir of ['asc', 'desc']) assert.deepEqual(applyListState(undated, listState({ sort: 'released', dir })).map((p) => p.id), ['a', 'z'], dir);
+});
+
+test('nextSort reverses the current key and opens another key in its natural direction', () => {
+  assert.deepEqual(nextSort({ sort: 'updated', dir: 'desc' }, 'updated'), { sort: 'updated', dir: 'asc' });
+  assert.deepEqual(nextSort({ sort: 'updated', dir: 'asc' }, 'updated'), { sort: 'updated', dir: 'desc' });
+  assert.deepEqual(nextSort({ sort: 'updated', dir: 'asc' }, 'released'), { sort: 'released', dir: 'desc' });
+  assert.deepEqual(nextSort({ sort: 'released', dir: 'desc' }, 'name'), { sort: 'name', dir: 'asc' });
+  assert.deepEqual(nextSort({ sort: 'name', dir: 'asc' }, 'name'), { sort: 'name', dir: 'desc' });
+  assert.deepEqual(nextSort({ sort: 'name', dir: 'desc' }, 'updated'), { sort: 'updated', dir: 'desc' });
 });
 
 /* ---------- List State in the query string ---------- */
+
+test('parseListState reads dir; an unknown or absent dir is the key\'s natural direction', () => {
+  assert.deepEqual(parseListState('?dir=asc'), listState({ dir: 'asc' }));
+  assert.deepEqual(parseListState('?sort=name&dir=desc'), listState({ sort: 'name', dir: 'desc' }));
+  assert.deepEqual(parseListState('?sort=released&dir=sideways'), listState({ sort: 'released', dir: 'desc' }));
+  assert.deepEqual(parseListState('?sort=released'), listState({ sort: 'released', dir: 'desc' }));
+  assert.deepEqual(parseListState('?sort=bogus&dir=asc'), listState({ dir: 'asc' }));
+});
+
+test('formatListState writes dir only when it differs from the key\'s natural direction', () => {
+  assert.equal(formatListState(listState({ dir: 'asc' })), '?dir=asc');
+  assert.equal(formatListState(listState({ sort: 'released', dir: 'asc' })), '?sort=released&dir=asc');
+  assert.equal(formatListState(listState({ sort: 'name', dir: 'desc' })), '?sort=name&dir=desc');
+  assert.equal(formatListState(listState({ sort: 'name', dir: 'asc' })), '?sort=name');
+});
+
+test('every sort key and direction round-trips through the query string', () => {
+  for (const sort of ['updated', 'released', 'name']) {
+    for (const dir of ['asc', 'desc']) {
+      const state = listState({ sort, dir });
+      assert.deepEqual(parseListState(formatListState(state)), state, `${sort} ${dir}`);
+    }
+  }
+});
 
 test('parseListState reads q, repeated tag, and sort; unknown sort falls back to Updated', () => {
   assert.deepEqual(parseListState('?q=pin&tag=dms&tag=files&sort=name'), { q: 'pin', tags: ['dms', 'files'], sort: 'name', dir: 'asc' });

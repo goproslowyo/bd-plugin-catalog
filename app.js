@@ -50,6 +50,7 @@ import {
   diffLines,
   diffStats,
   diffHunks,
+  tokenizeJs,
 } from './catalog.js';
 
 /** @typedef {import('./catalog.js').Plugin} Plugin */
@@ -1139,7 +1140,7 @@ function forkChangesLine(p, range) {
 
 /**
  * The outcome of fetching and diffing both ends of the Fork Changes range.
- * @typedef {{ status: 'ok', ops: import('./catalog.js').DiffOp[] } | { status: 'too-large' } | { status: 'failed', reason: string }} ForkDiff
+ * @typedef {{ status: 'ok', ops: import('./catalog.js').DiffOp[], before: string, after: string } | { status: 'too-large' } | { status: 'failed', reason: string }} ForkDiff
  */
 
 /**
@@ -1164,7 +1165,7 @@ function forkDiff(p, range) {
     }
     if (!before.ok || !after.ok) throw new Error('unreachable');
     const ops = diffLines(before.text, after.text, { maxEditLength: DIFF_MAX_EDITS });
-    return ops ? /** @type {ForkDiff} */ ({ status: 'ok', ops }) : /** @type {ForkDiff} */ ({ status: 'too-large' });
+    return ops ? /** @type {ForkDiff} */ ({ status: 'ok', ops, before: before.text, after: after.text }) : /** @type {ForkDiff} */ ({ status: 'too-large' });
   })();
   state.forkDiffs.set(p.id, run);
   return run;
@@ -1230,6 +1231,14 @@ function forkDiffSection(range, result, compareHref) {
     return section;
   }
   const view = h('div', { class: 'diff', role: 'region', 'aria-label': 'Changes since the fork', tabindex: '0' });
+  // Whole files are tokenised so a hunk opening inside a comment or template is still coloured right.
+  const oldTokens = tokenizeJs(result.before);
+  const newTokens = tokenizeJs(result.after);
+  /** @param {import('./catalog.js').DiffLine} line */
+  const codeFor = (line) => {
+    const tokens = line.type === 'del' ? oldTokens[/** @type {number} */ (line.oldNo) - 1] : newTokens[/** @type {number} */ (line.newNo) - 1];
+    return h('code', {}, ...(tokens ?? [{ kind: 'plain', text: line.text }]).map((t) => (t.kind === 'plain' ? t.text : h('span', { class: `tk-${t.kind}`, text: t.text }))));
+  };
   for (const hunk of hunks) {
     const first = hunk.lines[0];
     const last = hunk.lines[hunk.lines.length - 1];
@@ -1240,7 +1249,7 @@ function forkDiffSection(range, result, compareHref) {
         h('span', { class: 'ln num', 'aria-hidden': 'true', text: line.newNo ?? '' }),
         h('span', { class: 'mk', 'aria-hidden': 'true', text: line.type === 'add' ? '+' : line.type === 'del' ? '−' : ' ' }),
         line.type === 'eq' ? null : h('span', { class: 'sr-only', text: line.type === 'add' ? 'Added: ' : 'Removed: ' }),
-        h('code', { text: line.text })));
+        codeFor(line)));
     }
     view.append(block);
   }

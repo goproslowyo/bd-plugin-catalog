@@ -36,6 +36,7 @@ import {
   diffStats,
   diffHunks,
   forkChangesArtifactUrls,
+  tokenizeJs,
 } from '../catalog.js';
 import { createHash } from 'node:crypto';
 
@@ -617,6 +618,33 @@ test('diffHunks merges changes closer than twice the context into one hunk', () 
   assert.equal(hunks.length, 1);
   assert.equal(hunks[0].lines[0].oldNo, 2);
   assert.equal(hunks[0].lines.at(-1).oldNo, 13);
+});
+
+test('tokenizeJs marks keywords, strings, numbers and line comments, and joins back to the line', () => {
+  const [line] = tokenizeJs('const x = foo("a\\"b", 42) + \'c\'; // done');
+  assert.deepEqual(line, [
+    { kind: 'keyword', text: 'const' }, { kind: 'plain', text: ' x = foo(' }, { kind: 'string', text: '"a\\"b"' }, { kind: 'plain', text: ', ' },
+    { kind: 'number', text: '42' }, { kind: 'plain', text: ') + ' }, { kind: 'string', text: '\'c\'' }, { kind: 'plain', text: '; ' }, { kind: 'comment', text: '// done' },
+  ]);
+  assert.equal(line.map((t) => t.text).join(''), 'const x = foo("a\\"b", 42) + \'c\'; // done');
+});
+
+test('tokenizeJs carries block comments and template strings across lines and closes them where they end', () => {
+  const lines = tokenizeJs('/**\n * @name X\n */ return 1;\nconst t = `a\nb ${c}\nd` + 2;');
+  assert.deepEqual(lines[0], [{ kind: 'comment', text: '/**' }]);
+  assert.deepEqual(lines[1], [{ kind: 'comment', text: ' * @name X' }]);
+  assert.deepEqual(lines[2], [{ kind: 'comment', text: ' */' }, { kind: 'plain', text: ' ' }, { kind: 'keyword', text: 'return' }, { kind: 'plain', text: ' ' }, { kind: 'number', text: '1' }, { kind: 'plain', text: ';' }]);
+  assert.deepEqual(lines[3], [{ kind: 'keyword', text: 'const' }, { kind: 'plain', text: ' t = ' }, { kind: 'string', text: '`a' }]);
+  assert.deepEqual(lines[4], [{ kind: 'string', text: 'b ${c}' }]);
+  assert.deepEqual(lines[5], [{ kind: 'string', text: 'd`' }, { kind: 'plain', text: ' + ' }, { kind: 'number', text: '2' }, { kind: 'plain', text: ';' }]);
+});
+
+test('tokenizeJs: an identifier that merely contains a keyword is plain, and every line round-trips', () => {
+  const src = 'let returned = this.classic;\n\tif (x instanceof Y) {}\n';
+  const lines = tokenizeJs(src);
+  assert.deepEqual(lines[0].filter((t) => t.kind === 'keyword').map((t) => t.text), ['let', 'this']);
+  assert.deepEqual(lines[1].filter((t) => t.kind === 'keyword').map((t) => t.text), ['if', 'instanceof']);
+  assert.deepEqual(lines.map((l) => l.map((t) => t.text).join('')), src.replace(/\n$/, '').split('\n'));
 });
 
 test('forkChangesArtifactUrls names the artifact at both ends of the range on the raw host of the served-from repository', () => {

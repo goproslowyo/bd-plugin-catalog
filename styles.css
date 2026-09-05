@@ -387,6 +387,11 @@ dialog.sheet[open]::backdrop { animation: fade-in .26s var(--ease); }
 .diff .dl.del { background: var(--bad-soft); }
 .diff .dl.del .mk { color: var(--bad); font-weight: 700; }
 .diff .dl.add .ln, .diff .dl.del .ln { color: var(--ink-1); }
+.diff .tk-comment { color: var(--ink-2); font-style: italic; }
+.diff .dl.add .tk-comment, .diff .dl.del .tk-comment { color: var(--ink-1); }
+.diff .tk-string { color: var(--blue); }
+.diff .tk-keyword { color: var(--accent-hover); font-weight: 600; } /* the hover shade: the plain accent falls under 4.5:1 on the tinted rows in dark */
+.diff .tk-number { color: var(--warn); }
 .diff code { white-space: pre; padding-right: 12px; color: var(--ink-0); }
 .diff .dl.del code { color: var(--ink-1); }
 .d-links { display: flex; flex-wrap: wrap; gap: var(--s-2); }

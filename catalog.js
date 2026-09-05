@@ -498,6 +498,103 @@ function backtrack(a, b, trace, offset) {
   return ops.reverse();
 }
 
+/* ---------- JavaScript tokens, for colouring the diff ---------- */
+
+/** @typedef {'plain' | 'comment' | 'string' | 'keyword' | 'number'} TokenKind */
+/** @typedef {{ kind: TokenKind, text: string }} Token */
+
+const JS_KEYWORDS = new Set([
+  'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else',
+  'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'null', 'of',
+  'return', 'static', 'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'undefined', 'var', 'void', 'while', 'with', 'yield',
+]);
+
+/**
+ * Splits JavaScript into per-line tokens of five kinds, carrying block
+ * comments and template strings across lines so a hunk that starts inside
+ * one is still coloured right. Regular-expression literals and template
+ * interpolations are not recognised; they read as plain text and string
+ * respectively. Joining a line's tokens gives the line back exactly.
+ * @param {string} text
+ * @returns {Token[][]}
+ */
+export function tokenizeJs(text) {
+  /** @type {Token[][]} */
+  const out = [];
+  /** @type {'block' | 'template' | null} what an unfinished line left open */
+  let open = null;
+  for (const line of toLines(text)) {
+    /** @type {Token[]} */
+    const tokens = [];
+    const push = /** @param {TokenKind} kind @param {string} s */ (kind, s) => {
+      if (!s) return;
+      const last = tokens[tokens.length - 1];
+      if (last && last.kind === kind) last.text += s;
+      else tokens.push({ kind, text: s });
+    };
+    let i = 0;
+    while (i < line.length) {
+      if (open === 'block') {
+        const end = line.indexOf('*/', i);
+        push('comment', line.slice(i, end < 0 ? line.length : end + 2));
+        i = end < 0 ? line.length : end + 2;
+        if (end >= 0) open = null;
+        continue;
+      }
+      if (open === 'template') {
+        let j = i;
+        while (j < line.length && line[j] !== '`') j += line[j] === '\\' ? 2 : 1;
+        push('string', line.slice(i, Math.min(j + 1, line.length)));
+        i = j + 1;
+        if (j < line.length) open = null;
+        continue;
+      }
+      const c = line[i];
+      const pair = line.slice(i, i + 2);
+      if (pair === '//') {
+        push('comment', line.slice(i));
+        break;
+      }
+      if (pair === '/*') {
+        open = 'block';
+        continue;
+      }
+      if (c === '`') {
+        open = 'template';
+        push('string', c);
+        i += 1;
+        continue;
+      }
+      if (c === '"' || c === '\'') {
+        let j = i + 1;
+        while (j < line.length && line[j] !== c) j += line[j] === '\\' ? 2 : 1;
+        push('string', line.slice(i, Math.min(j + 1, line.length)));
+        i = j + 1;
+        continue;
+      }
+      if (/[A-Za-z_$]/.test(c)) {
+        let j = i + 1;
+        while (j < line.length && /[\w$]/.test(line[j])) j += 1;
+        const word = line.slice(i, j);
+        push(JS_KEYWORDS.has(word) ? 'keyword' : 'plain', word);
+        i = j;
+        continue;
+      }
+      if (/[0-9]/.test(c)) {
+        let j = i + 1;
+        while (j < line.length && /[\w.]/.test(line[j])) j += 1;
+        push('number', line.slice(i, j));
+        i = j;
+        continue;
+      }
+      push('plain', c);
+      i += 1;
+    }
+    out.push(tokens);
+  }
+  return out;
+}
+
 /** How many lines an edit script adds and removes. @param {DiffOp[]} ops */
 export function diffStats(ops) {
   let added = 0;

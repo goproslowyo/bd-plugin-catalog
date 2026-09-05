@@ -509,12 +509,16 @@ const JS_KEYWORDS = new Set([
   'return', 'static', 'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'undefined', 'var', 'void', 'while', 'with', 'yield',
 ]);
 
+/** Text after which a `/` starts a regular-expression literal rather than a division. */
+const BEFORE_REGEX = /(?:^|[=(,:[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case|do|else|in|of|throw|void|yield|await))\s*$/;
+
 /**
  * Splits JavaScript into per-line tokens of five kinds, carrying block
  * comments and template strings across lines so a hunk that starts inside
- * one is still coloured right. Regular-expression literals and template
- * interpolations are not recognised; they read as plain text and string
- * respectively. Joining a line's tokens gives the line back exactly.
+ * one is still coloured right. A regular-expression literal counts as a
+ * string when it follows an operator, an opening bracket or a keyword, so
+ * its slashes never open a comment. Template interpolations read as string.
+ * Joining a line's tokens gives the line back exactly.
  * @param {string} text
  * @returns {Token[][]}
  */
@@ -557,6 +561,22 @@ export function tokenizeJs(text) {
       }
       if (pair === '/*') {
         open = 'block';
+        push('comment', pair);
+        i += 2; // the closing search must start past the opener, or `/*/` would close itself
+        continue;
+      }
+      if (c === '/' && BEFORE_REGEX.test(line.slice(0, i))) {
+        let j = i + 1;
+        let inClass = false;
+        while (j < line.length && (inClass || line[j] !== '/')) {
+          if (line[j] === '\\') j += 1;
+          else if (line[j] === '[') inClass = true;
+          else if (line[j] === ']') inClass = false;
+          j += 1;
+        }
+        while (j + 1 < line.length && /[a-z]/.test(line[j + 1])) j += 1; // flags
+        push('string', line.slice(i, Math.min(j + 1, line.length)));
+        i = j + 1;
         continue;
       }
       if (c === '`') {
@@ -608,14 +628,17 @@ export function diffStats(ops) {
 
 /** @typedef {{ type: DiffOp['type'], text: string, oldNo: number | null, newNo: number | null }} DiffLine */
 
+/** Equal lines shown either side of a change in a hunk. */
+const HUNK_CONTEXT = 3;
+
 /**
- * Groups an edit script into hunks: each run of changes with `context` equal
+ * Groups an edit script into hunks: each run of changes with three equal
  * lines either side, numbered on both sides. No changes, no hunks.
  * @param {DiffOp[]} ops
- * @param {number} [context]
  * @returns {Array<{ lines: DiffLine[] }>}
  */
-export function diffHunks(ops, context = 3) {
+export function diffHunks(ops) {
+  const context = HUNK_CONTEXT;
   /** @type {DiffLine[]} */
   const numbered = [];
   let oldNo = 0;

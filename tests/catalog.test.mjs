@@ -639,6 +639,21 @@ test('tokenizeJs carries block comments and template strings across lines and cl
   assert.deepEqual(lines[5], [{ kind: 'string', text: 'd`' }, { kind: 'plain', text: ' + ' }, { kind: 'number', text: '2' }, { kind: 'plain', text: ';' }]);
 });
 
+test('tokenizeJs: a block comment opener searches for its close past itself, so `/*/` stays open', () => {
+  const lines = tokenizeJs('/*/ not closed\nstill */ x');
+  assert.deepEqual(lines[0], [{ kind: 'comment', text: '/*/ not closed' }]);
+  assert.deepEqual(lines[1], [{ kind: 'comment', text: 'still */' }, { kind: 'plain', text: ' x' }]);
+});
+
+test('tokenizeJs: a regular-expression literal after an operator or bracket is a string and never opens a comment', () => {
+  const lines = tokenizeJs('const r = /\\/*[/]x/gi.test(s); a = b / c / d; // ok\nreturn /a\\/b/;\nnext');
+  assert.deepEqual(lines[0], [
+    { kind: 'keyword', text: 'const' }, { kind: 'plain', text: ' r = ' }, { kind: 'string', text: '/\\/*[/]x/gi' }, { kind: 'plain', text: '.test(s); a = b / c / d; ' }, { kind: 'comment', text: '// ok' },
+  ]);
+  assert.deepEqual(lines[1], [{ kind: 'keyword', text: 'return' }, { kind: 'plain', text: ' ' }, { kind: 'string', text: '/a\\/b/' }, { kind: 'plain', text: ';' }]);
+  assert.deepEqual(lines[2], [{ kind: 'plain', text: 'next' }]);
+});
+
 test('tokenizeJs: an identifier that merely contains a keyword is plain, and every line round-trips', () => {
   const src = 'let returned = this.classic;\n\tif (x instanceof Y) {}\n';
   const lines = tokenizeJs(src);

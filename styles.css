@@ -22,6 +22,9 @@
   --warn-soft: rgba(245, 183, 78, .14);
   --bad: #ff6b81;
   --bad-soft: rgba(255, 107, 129, .14);
+  --code-string: var(--blue);
+  --code-keyword: var(--accent-hover); /* the plain accent falls under 4.5:1 on the tinted diff rows */
+  --code-number: var(--warn);
   --backdrop: rgba(6, 7, 14, .62);
   --r-1: 6px;
   --r-2: 10px;
@@ -70,6 +73,9 @@
   --warn-soft: rgba(143, 90, 7, .12);
   --bad: #c9314c;
   --bad-soft: rgba(201, 49, 76, .12);
+  --code-string: #1f57a0; /* darker than --blue: 4.0:1 on the tinted diff rows */
+  --code-keyword: var(--accent-hover);
+  --code-number: #7a4c05; /* darker than --warn: 4.2:1 on the tinted diff rows */
   --backdrop: rgba(20, 23, 43, .45);
   --shadow-1: 0 1px 2px rgba(20, 23, 43, .08), 0 6px 18px -8px rgba(20, 23, 43, .18);
   --shadow-2: 0 12px 40px -12px rgba(20, 23, 43, .28), 0 2px 6px rgba(20, 23, 43, .08);
@@ -369,10 +375,10 @@ dialog.sheet[open]::backdrop { animation: fade-in .26s var(--ease); }
 .linklike:disabled { cursor: progress; color: var(--ink-2); text-decoration: none; }
 
 /* in-page Fork Changes */
-.d-diff-slot:empty { display: none; }
-.d-diff-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin: 0 0 var(--s-3); font-size: var(--t-xs); color: var(--ink-2); }
-.d-diff-meta a { color: var(--blue); display: inline-flex; align-items: center; gap: 4px; }
-.d-diff-meta svg.i { width: 13px; height: 13px; }
+.d-changes-slot:empty { display: none; }
+.d-changes-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin: 0 0 var(--s-3); font-size: var(--t-xs); color: var(--ink-2); }
+.d-changes-meta a { color: var(--blue); display: inline-flex; align-items: center; gap: 4px; }
+.d-changes-meta svg.i { width: 13px; height: 13px; }
 .diff-add { color: var(--ok); font-weight: 600; }
 .diff-del { color: var(--bad); font-weight: 600; }
 .diff { font-family: var(--mono); font-size: 12px; line-height: 1.5; border: 1px solid var(--line); border-radius: var(--r-2); background: var(--bg-2); max-height: 60vh; overflow: auto; }
@@ -389,9 +395,9 @@ dialog.sheet[open]::backdrop { animation: fade-in .26s var(--ease); }
 .diff .dl.add .ln, .diff .dl.del .ln { color: var(--ink-1); }
 .diff .tk-comment { color: var(--ink-2); font-style: italic; }
 .diff .dl.add .tk-comment, .diff .dl.del .tk-comment { color: var(--ink-1); }
-.diff .tk-string { color: var(--blue); }
-.diff .tk-keyword { color: var(--accent-hover); font-weight: 600; } /* the hover shade: the plain accent falls under 4.5:1 on the tinted rows in dark */
-.diff .tk-number { color: var(--warn); }
+.diff .tk-string { color: var(--code-string); }
+.diff .tk-keyword { color: var(--code-keyword); font-weight: 600; }
+.diff .tk-number { color: var(--code-number); }
 .diff code { white-space: pre; padding-right: 12px; color: var(--ink-0); }
 .diff .dl.del code { color: var(--ink-1); }
 .d-links { display: flex; flex-wrap: wrap; gap: var(--s-2); }

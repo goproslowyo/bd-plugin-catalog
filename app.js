@@ -24,7 +24,7 @@ import {
   authorProfileUrl,
   licenseUrl,
   daysSince,
-  isRecentlyUpdated,
+  RECENT_DAYS,
   hue,
   initials,
   collectTags,
@@ -83,7 +83,9 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
-/** @type {Record<string, Array<{ path?: string, circle?: [number, number, number], rect?: [number, number, number, number, number] }>>} */
+/** @typedef {{ path?: string, circle?: [number, number, number], rect?: [number, number, number, number, number] }} IconPart */
+
+/** @satisfies {Record<string, IconPart[]>} */
 const ICONS = {
   mark: [{ path: 'M9 2v6m6-6v6M6 8h12v3a6 6 0 0 1-12 0V8zm6 9v5' }],
   search: [{ circle: [11, 11, 7] }, { path: 'm20 20-3.5-3.5' }],
@@ -734,13 +736,13 @@ function tile(p, large) {
 
 /**
  * How long ago a Recently Updated plugin changed, or null when it is not recent.
- * @param {Plugin} p
+ * @param {Pick<Plugin, 'lastUpdated'>} p
  * @param {Date} today
  * @returns {{ days: number, ago: string } | null}
  */
 function recencyPhrase(p, today) {
   const days = daysSince(p.lastUpdated, today);
-  if (days === null || !isRecentlyUpdated(p.lastUpdated, today)) return null;
+  if (days === null || days < 0 || days > RECENT_DAYS) return null;
   return { days, ago: `${days} ${days === 1 ? 'day' : 'days'} ago` };
 }
 
@@ -1266,7 +1268,6 @@ els.refresh.addEventListener('click', () => {
 
 /* ============ Boot ============ */
 
-// Static icons are drawn from the same table as the dynamic ones, so the page carries no SVG markup.
 for (const el of document.querySelectorAll('[data-icon]')) {
   const names = /** @type {Array<keyof typeof ICONS>} */ ((el.getAttribute('data-icon') ?? '').split(' '));
   el.prepend(...names.map((name) => icon(name, `icon-${name}`)));

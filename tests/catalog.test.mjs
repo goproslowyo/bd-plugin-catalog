@@ -23,7 +23,6 @@ import {
   cacheKey,
   pluginsFolderRows,
   detectPlatform,
-  THROTTLED_COPY,
 } from '../catalog.js';
 
 const REPO = { owner: 'goproslowyo', repo: 'bd-plugins', ref: 'main' };
@@ -200,7 +199,11 @@ test('readManifest is null for an invalid manifest: no plugins array', () => {
 
 test('brokenFromFetch names the HTTP status, a network error, or throttling', () => {
   assert.deepEqual(brokenFromFetch({ kind: 'http', status: 404 }), { status: 'broken', reason: 'plugin.json could not be fetched (404).', throttled: false });
-  assert.deepEqual(brokenFromFetch({ kind: 'http', status: 429 }), { status: 'broken', reason: THROTTLED_COPY, throttled: true });
+  assert.deepEqual(brokenFromFetch({ kind: 'http', status: 429 }), {
+    status: 'broken',
+    reason: 'GitHub is limiting downloads from your network. Wait a few minutes, then retry. This isn\'t automatic.',
+    throttled: true,
+  });
   assert.deepEqual(brokenFromFetch({ kind: 'network' }), { status: 'broken', reason: 'plugin.json could not be fetched (network error).', throttled: false });
 });
 
@@ -371,10 +374,11 @@ test('cacheKey names the repository, ref and schema version', () => {
 });
 
 test('pluginsFolderRows lists the visitor OS first and marks it, or Windows first unmarked without a signal', () => {
-  const mac = pluginsFolderRows('mac');
-  assert.deepEqual(mac.map((r) => r.os), ['macOS', 'Windows', 'Linux']);
-  assert.deepEqual(mac.map((r) => r.you), [true, false, false]);
-  assert.equal(mac[0].path, '~/Library/Application Support/BetterDiscord/plugins');
+  assert.deepEqual(pluginsFolderRows('mac'), [
+    { os: 'macOS', path: '~/Library/Application Support/BetterDiscord/plugins', note: null, you: true },
+    { os: 'Windows', path: '%APPDATA%\\BetterDiscord\\plugins', note: null, you: false },
+    { os: 'Linux', path: '$XDG_CONFIG_HOME/BetterDiscord/plugins', note: 'Defaults to ~/.config/BetterDiscord/plugins', you: false },
+  ]);
   assert.deepEqual(pluginsFolderRows('linux').map((r) => r.os), ['Linux', 'Windows', 'macOS']);
   const unknown = pluginsFolderRows(null);
   assert.deepEqual(unknown.map((r) => r.os), ['Windows', 'macOS', 'Linux']);

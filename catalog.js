@@ -106,7 +106,8 @@ export function isAllowlisted(v) {
 
 /**
  * Milliseconds at UTC midnight of a YYYY-MM-DD string. An impossible day such
- * as 30 February rolls over into the next month rather than failing.
+ * as 30 February either fails to parse or rolls over into the next month,
+ * depending on the engine, so callers compare the fields back.
  * @param {string} isoDate
  */
 const utcMidnight = (isoDate) => Date.parse(`${isoDate}T00:00:00Z`);
@@ -370,7 +371,7 @@ export const deepLinkHash = (id) => `#plugin/${encodeURIComponent(id)}`;
  */
 export function artifactFilename(p) {
   if (/^[A-Za-z0-9._-]+$/.test(p.entryName)) return `${p.entryName}.plugin.js`;
-  const segment = p.downloadUrl.split('?')[0].split('#')[0].split('/').pop();
+  const segment = p.downloadUrl.split(/[?#]/, 1)[0].split('/').pop() ?? '';
   if (/^[A-Za-z0-9._-]+\.plugin\.js$/.test(segment)) return segment;
   return `${p.id}.plugin.js`;
 }
@@ -439,7 +440,7 @@ export const licenseUrl = (license) => `https://spdx.org/licenses/${encodeURICom
 
 /* ---------- Recency ---------- */
 
-const RECENT_DAYS = 30;
+export const RECENT_DAYS = 30;
 
 /**
  * Whole days between a YYYY-MM-DD date and today (UTC), or null without a date.
@@ -450,7 +451,7 @@ export function daysSince(isoDate, today) {
   if (!isoDate) return null;
   const then = utcMidnight(isoDate);
   if (Number.isNaN(then)) return null;
-  const todayUtc = utcMidnight(today.toISOString().slice(0, 10));
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
   return Math.round((todayUtc - then) / 864e5);
 }
 
